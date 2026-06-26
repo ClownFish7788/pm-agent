@@ -1,0 +1,40 @@
+[tool.poetry]
+name = "pm-agent-backend"
+version = "0.1.0"
+description = "PM Agent 后端 — AI 项目经理分析系统的 Agent 引擎"
+authors = ["ClownFish7788"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.11"
+# ===== Web 框架 =====
+# MVP 阶段用控制台脚本验证，FastAPI 预留 SSE 端点
+fastapi = "^0.115.0"
+uvicorn = { version = "^0.32.0", extras = ["standard"] }
+
+# ===== Agent 编排 =====
+langgraph = "^0.2.0"       # DAG 状态图编排引擎
+langchain = "^0.3.0"       # ChatModel 封装 + Prompt Template 工具
+langchain-openai = "^0.2.0" # DeepSeek 兼容 OpenAI SDK 的 LangChain 适配
+
+# ===== LLM =====
+openai = "^1.50.0"         # DeepSeek API 兼容 OpenAI 格式
+
+# ===== 搜索 =====
+tavily-python = "^0.5.0"   # MVP 搜索 Provider
+
+# ===== 数据验证 =====
+pydantic = "^2.0.0"        # 结构化数据模型，所有 Agent 间通信走 Pydantic
+
+# ===== 工具 =====
+httpx = "^0.28.0"          # 异步 HTTP 客户端（预留多源搜索扩展）
+python-dotenv = "^1.0.0"   # 环境变量管理
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+pytest-asyncio = "^0.24.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
