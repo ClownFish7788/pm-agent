@@ -137,6 +137,7 @@ class MarketLeader:
             raw_result = await self.llm.chat_structured(
                 messages=messages,
                 output_schema=MarketResearchState,
+                max_tokens=4096,  # 需要输出多条 AnalysisPoint + summary
             )
         except Exception as e:
             log_error("MarketLeader", f"LLM 综合分析失败: {type(e).__name__}: {e}")

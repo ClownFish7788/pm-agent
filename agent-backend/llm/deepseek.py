@@ -183,16 +183,25 @@ class DeepSeekProvider(BaseLLMProvider):
             data = json.loads(json_str)
             return output_schema.model_validate(data)
         except (json.JSONDecodeError, Exception) as e:
-            # JSON 解析失败：打印错误，返回一个空壳对象
-            # 空壳对象所有字段取默认值，上游可据此判断「该 Agent 输出无效」
+            # 尝试修复被截断的 JSON（LLM 输出超出 max_tokens 时常见）
+            json_repaired = self._repair_truncated_json(json_str)
+            if json_repaired is not None:
+                try:
+                    data = json.loads(json_repaired)
+                    print(f"  🔧 [{self.provider_name}] JSON 截断已修复，部分字段可能为空")
+                    return output_schema.model_validate(data)
+                except Exception:
+                    pass
+
+            # 修复失败：打印错误，返回空壳
             print(f"  ⚠️  [{self.provider_name}] chat_structured() JSON 解析失败: {e}")
             print(f"  ⚠️  原始回复前 500 字符: {raw_text[:500]}")
-            # 尝试构造空壳
             try:
-                return output_schema()
+                # model_construct 跳过验证，用默认值填字段
+                return output_schema.model_construct()
             except Exception:
                 raise RuntimeError(
-                    f"[{self.provider_name}] chat_structured() JSON 解析失败且无法构造空壳对象: {e}"
+                    f"[{self.provider_name}] JSON 解析失败且无法构造空壳: {e}"
                 ) from e
 
     # ------------------------------------------------------------------
@@ -236,3 +245,87 @@ class DeepSeekProvider(BaseLLMProvider):
 
         # 情况 4：原样返回
         return text
+
+    @staticmethod
+    def _repair_truncated_json(json_str: str) -> str | None:
+        """尝试修复被 max_tokens 截断的 JSON。
+
+        当 LLM 输出超过 max_tokens 时，JSON 可能在中间被截断，表现为：
+        - 字符串未闭合（"Unterminated string"）
+        - 对象/数组未闭合
+        - 逗号后内容缺失
+
+        本方法尝试简单修补：
+        1. 补上缺失的引号（如果最后一个字符串没闭合）
+        2. 补上缺失的 } 和 ]（按括号深度计算）
+
+        参数：
+            json_str：可能被截断的 JSON 字符串
+
+        返回：
+            修复后的 JSON 字符串。如果无法修复，返回 None
+        """
+        if not json_str:
+            return None
+
+        s = json_str.rstrip()
+
+        # ---- 步骤 1：处理未闭合的字符串值 ----
+        # 统计引号：正常情况下每个 key/value 的引号成对出现
+        # 如果引号数是奇数，说明最后一个字符串被截断
+        in_string = False
+        escaped = False
+        quote_count = 0
+        for ch in s:
+            if escaped:
+                escaped = False
+                continue
+            if ch == '\\':
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                quote_count += 1
+
+        # 如果在字符串中间被截断，补一个引号
+        if in_string:
+            s += '"'
+
+        # ---- 步骤 2：计算未闭合的括号深度 ----
+        # 统计 { [ vs } ]，补上缺失的闭合括号
+        depth_braces = 0   # { +1, } -1
+        depth_brackets = 0 # [ +1, ] -1
+        in_string = False
+        escaped = False
+        for ch in s:
+            if escaped:
+                escaped = False
+                continue
+            if ch == '\\':
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == '{':
+                depth_braces += 1
+            elif ch == '}':
+                depth_braces -= 1
+            elif ch == '[':
+                depth_brackets += 1
+            elif ch == ']':
+                depth_brackets -= 1
+
+        # 补上缺失的闭合括号
+        s += ']' * max(0, depth_brackets)
+        s += '}' * max(0, depth_braces)
+
+        # ---- 步骤 3：验证 ----
+        # 快速测试这个修复后的 JSON 能否被解析
+        try:
+            json.loads(s)
+            return s
+        except json.JSONDecodeError:
+            return None

@@ -128,9 +128,12 @@ class SearchAgent:
         )
 
         try:
+            # max_tokens=4096：底层搜索需要输出 5 条 finding + summary + JSON 结构
+            # 默认 2048 不够用，LLM 写到一半会被截断导致 JSON 不完整
             result = await self.llm.chat_structured(
                 messages=messages,
                 output_schema=SubAgentOutput,
+                max_tokens=4096,
             )
         except Exception as e:
             log_error(self.agent_id, f"LLM 调用失败: {type(e).__name__}: {e}")
