@@ -147,22 +147,26 @@ class TopAgent:
                 max_cycles=3,
             )
 
+        # 类型收窄：execution_plan 在上述 try/except 两个分支中都会赋值
+        plan = state.execution_plan
+        assert plan is not None, "execution_plan 应在 _phase_plan 中赋值"
+
         # 打印执行计划
         log_agent_output(
             agent_name="TopAgent (CEO)",
             agent_emoji="🔷",
             input_summary=f"项目描述: {project_text[:100]}",
             output={
-                "steps": [s.value for s in state.execution_plan.steps],
-                "skipped": [s.value for s in state.execution_plan.skipped],
-                "focus_areas": state.execution_plan.focus_areas,
-                "max_cycles": state.execution_plan.max_cycles,
+                "steps": [s.value for s in plan.steps],
+                "skipped": [s.value for s in plan.skipped],
+                "focus_areas": plan.focus_areas,
+                "max_cycles": plan.max_cycles,
             },
         )
 
         # 打印跳过的中层
-        for skipped_type in state.execution_plan.skipped:
-            reason = state.execution_plan.skip_reasons.get(skipped_type.value, "无")
+        for skipped_type in plan.skipped:
+            reason = plan.skip_reasons.get(skipped_type.value, "无")
             log_skip(skipped_type.value, reason)
 
         # 打印预算

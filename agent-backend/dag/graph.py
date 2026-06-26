@@ -48,9 +48,12 @@ from .nodes import node_top_planning, node_market_research, node_aggregate
 # 节点名称常量（避免字符串硬编码拼写错误）
 # =============================================================================
 
-NODE_PLAN = "top_planning"          # 顶层规划
-NODE_MARKET = "market_research"     # 市场调研
-NODE_AGGREGATE = "aggregate"        # 汇总报告
+# ⚠️ 节点名称不能与 State 字段名相同（LangGraph 会报 ValueError）
+# State 有 market_research/competitor_analysis/... 字段
+# 所以节点名用动词前缀区分：run_xxx
+NODE_PLAN = "top_planning"              # 顶层规划
+NODE_MARKET = "run_market_research"     # 执行市场调研
+NODE_AGGREGATE = "aggregate"            # 汇总报告
 
 
 # =============================================================================

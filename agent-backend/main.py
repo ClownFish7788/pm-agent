@@ -3,10 +3,10 @@ PM Agent 后端入口。
 
 两种运行模式：
   === 模式 1：控制台脚本（MVP） ===
-  python main.py "你的项目描述"
+  poetry run python main.py "你的项目描述"
 
   示例：
-  python main.py "我想做一个宠物社交App，连接同城的宠物主人"
+  poetry run python main.py "我想做一个宠物社交App，连接同城的宠物主人"
 
   === 模式 2：FastAPI 服务（Phase 2 预留） ===
   路由：
@@ -14,7 +14,7 @@ PM Agent 后端入口。
     GET  /health   — 健康检查
 
   启动：
-  uvicorn main:app --reload --port 8000
+  poetry run uvicorn main:app --reload --port 8000
 
 环境变量要求：
   DEEPSEEK_API_KEY  — DeepSeek API 密钥（必需）
@@ -24,6 +24,10 @@ PM Agent 后端入口。
   1. cp .env.example .env
   2. 编辑 .env 填入真实 API Key
   3. poetry install
+
+如果 IDE 提示 "无法解析导入"：
+  请将 VS Code 的 Python 解释器切换到 .venv/Scripts/python.exe
+  Ctrl+Shift+P → Python: Select Interpreter → 选择 .venv
 """
 
 from __future__ import annotations
@@ -31,18 +35,81 @@ from __future__ import annotations
 import os
 import sys
 
-# ---- 加载 .env 文件（必须在其他 import 之前） ----
+# =============================================================================
+# 0. 立即修复 Windows 终端编码（必须在任何 print 之前）
+# =============================================================================
+# Windows 中文版终端默认 GBK 编码，无法输出 emoji（🔧✅❌ 等）。
+# 这会导致 UnicodeEncodeError，表现为程序直接崩溃无输出。
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass  # 极少数环境不支持 reconfigure，忽略
+
+# =============================================================================
+# 0.5 自动检测并切换到 Poetry venv（如果当前 Python 不是 venv 里的）
+# =============================================================================
+
+def _find_venv_python() -> str | None:
+    """查找本项目的 Poetry venv Python 可执行文件路径。
+
+    Poetry 配置了 virtualenvs.in-project=true，所以 venv 在
+    本项目 agent-backend/.venv 下。
+
+    返回：
+        venv Python 的完整路径，找不到则返回 None
+    """
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    _venv_dir = os.path.join(_script_dir, ".venv")
+
+    if not os.path.isdir(_venv_dir):
+        return None
+
+    if sys.platform == "win32":
+        _candidate = os.path.join(_venv_dir, "Scripts", "python.exe")
+    else:
+        _candidate = os.path.join(_venv_dir, "bin", "python")
+
+    if os.path.isfile(_candidate):
+        return _candidate
+    return None
+
+
+def _is_running_in_venv() -> bool:
+    """判断当前 Python 进程是否已经在 Poetry venv 中运行。
+
+    对比当前可执行文件路径和 venv 中的 Python 路径。
+    """
+    _venv = _find_venv_python()
+    if _venv is None:
+        return False
+    return os.path.normcase(os.path.abspath(sys.executable)) == os.path.normcase(os.path.abspath(_venv))
+
+
+# 如果不在 venv 中，自动重新用 venv Python 启动自己
+if not _is_running_in_venv():
+    _venv_python = _find_venv_python()
+    if _venv_python is not None:
+        # 用 venv Python 重新执行当前脚本，传递相同参数
+        os.execv(_venv_python, [_venv_python] + sys.argv)
+    # 如果找不到 venv，继续用当前 Python（依赖可能不全，但让后续 import 报错）
+
+# =============================================================================
+# 1. 加载 .env 文件（必须在其他项目内 import 之前）
+# =============================================================================
 # python-dotenv 会把 .env 中的变量注入 os.environ
 try:
-    from dotenv import load_dotenv
-    # 查找 agent-backend 目录下的 .env 文件
-    _env_path = os.path.join(os.path.dirname(__file__), ".env")
+    from dotenv import load_dotenv  # noqa: E402  (import 必须在 venv 检测之后)
+
+    _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     load_dotenv(_env_path)
-    print(f"✅ 已加载环境变量: {_env_path}")
+    print(f"[dotenv] 已加载环境变量: {_env_path}")
 except ImportError:
-    print("⚠️  python-dotenv 未安装，跳过 .env 加载。安装: pip install python-dotenv")
+    print("[dotenv] python-dotenv 未安装，跳过 .env 加载")
+    print("         安装: pip install python-dotenv")
 except Exception as e:
-    print(f"⚠️  .env 加载失败: {e}")
+    print(f"[dotenv] .env 加载失败: {e}")
 
 # ---- 项目内 import ----
 from agents.middle.market import MarketLeader
