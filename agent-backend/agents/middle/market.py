@@ -83,7 +83,7 @@ class MarketLeader:
             MarketResearchState 实例
         """
         # ---- 步骤 1：根据顶层给的 focus_areas 生成搜索关键词 ----
-        search_queries = self._generate_search_queries(project_summary, task.focus_areas)
+        search_queries = self._generate_search_queries(task, project_summary)
         print(f"  📊 [MarketLeader] 准备搜索 {len(search_queries)} 个方向:")
 
         for i, q in enumerate(search_queries, 1):
@@ -186,28 +186,31 @@ class MarketLeader:
     # ------------------------------------------------------------------
 
     def _generate_search_queries(
-        self,
-        project_summary: str,
-        focus_areas: list[str],
+        self, task: DepartmentTask, project_summary: str = ""
     ) -> list[str]:
-        """根据项目描述和关注方向生成搜索关键词。
+        """根据 Top Agent 下发的 core_topic + focus_areas 生成搜索关键词。
 
-        MVP 阶段：用简单规则拼接关键词，不调 LLM 生成。
-        Phase 2 可以让顶层 Agent 直接生成搜索策略。
+        Phase 2 可以让顶层 Agent 直接生成完整搜索策略。
 
         参数：
-            project_summary：项目描述
-            focus_areas：关注维度列表
+            task：Top Agent 下发的专属任务（含 core_topic + focus_areas）
+            project_summary：项目描述（仅当 core_topic 为空时 fallback 用）
 
         返回：
             搜索关键词列表（1-2 个）
         """
         queries: list[str] = []
-        core_topic = project_summary[:10] if len(project_summary) > 10 else project_summary
+        # 优先用 Top Agent LLM 提取的 core_topic
+        if task.core_topic:
+            core_topic = task.core_topic
+        elif project_summary:
+            core_topic = project_summary[:10] if len(project_summary) > 10 else project_summary
+        else:
+            core_topic = ""
 
-        # 只用顶层给的 focus_areas，不做 fallback
-        for area in focus_areas[:2]:
-            queries.append(f"{core_topic} {area}")
+        for area in task.focus_areas[:2]:
+            prefix = f"{core_topic} " if core_topic else ""
+            queries.append(f"{prefix}{area}")
 
         return queries
 

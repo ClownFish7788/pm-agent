@@ -41,11 +41,11 @@ TOP_AGENT_SYSTEM_PROMPT = """\
 
 {
   "tasks": [
-    {"agent_type": "market_research", "focus_areas": ["宠物社交市场规模 2025", "养宠用户画像"], "instruction": ""},
-    {"agent_type": "competitor_analysis", "focus_areas": ["宠物社交App直接竞品", "功能对比"], "instruction": ""},
-    {"agent_type": "product_design", "focus_areas": ["社交App功能架构", "MVP核心功能"], "instruction": ""},
-    {"agent_type": "future_direction", "focus_areas": ["宠物科技趋势", "线下社交"], "instruction": ""},
-    {"agent_type": "change_plan", "focus_areas": ["冷启动策略", "种子用户获取"], "instruction": ""}
+    {"agent_type": "market_research", "focus_areas": ["市场规模 2025", "养宠用户画像"], "core_topic": "宠物社交App", "instruction": ""},
+    {"agent_type": "competitor_analysis", "focus_areas": ["直接竞品", "功能对比"], "core_topic": "宠物社交App", "instruction": ""},
+    {"agent_type": "product_design", "focus_areas": ["社交App功能架构", "MVP核心功能"], "core_topic": "宠物社区产品", "instruction": ""},
+    {"agent_type": "future_direction", "focus_areas": ["宠物科技趋势", "线下社交"], "core_topic": "宠物经济", "instruction": ""},
+    {"agent_type": "change_plan", "focus_areas": ["冷启动策略", "种子用户获取"], "core_topic": "社交App启动", "instruction": ""}
   ],
   "skipped": [],
   "skip_reasons": {},
@@ -56,10 +56,11 @@ TOP_AGENT_SYSTEM_PROMPT = """\
 
 1. **为每个部门定制 focus_areas**：不要给所有部门一样的列表。市场关注规模/用户，竞品关注对比/差异，产品关注功能/体验，未来关注趋势/风险，改变关注启动/增长
 2. **每个部门 2-4 个 focus_areas**：太多底层 Agent 会超出预算，太少覆盖不够
-3. **如果用户没提竞品**：竞品分析的 focus_areas 要引导搜索同类产品（如"XX领域竞品 App"）
-4. **instruction 留空**：MVP 阶段不需要，Phase 2 驳回时用
-5. **max_cycles 固定为 3**
-6. **不要跳过任何部门**：MVP 阶段全部执行以获取完整视角
+3. **core_topic**：提取项目最核心的 2-3 个关键词（如"宠物社交App"），用于搜索引擎拼接。不同部门可以有不同的 core_topic 以匹配其分析角度（市场调研用"宠物经济"，产品设计用"宠物社区产品"）
+4. **如果用户没提竞品**：竞品分析的 focus_areas 要引导搜索同类产品（如"XX领域竞品 App"）
+5. **instruction 留空**：MVP 阶段不需要，Phase 2 驳回时用
+6. **max_cycles 固定为 3**
+7. **不要跳过任何部门**：MVP 阶段全部执行以获取完整视角
 """
 
 

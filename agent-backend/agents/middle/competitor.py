@@ -89,7 +89,7 @@ class CompetitorLeader:
             CompetitorState 实例（Public 字段已填充）
         """
         # ---- 步骤 1：生成搜索关键词 ----
-        search_queries = self._generate_search_queries(project_summary, task.focus_areas)
+        search_queries = self._generate_search_queries(task, project_summary)
         print(f"  🏢 [CompetitorLeader] 准备搜索 {len(search_queries)} 个方向:")
 
         for i, q in enumerate(search_queries, 1):
@@ -186,25 +186,29 @@ class CompetitorLeader:
     # ------------------------------------------------------------------
 
     def _generate_search_queries(
-        self,
-        project_summary: str,
-        focus_areas: list[str],
+        self, task: DepartmentTask, project_summary: str = ""
     ) -> list[str]:
-        """根据项目描述和关注方向生成竞品搜索关键词。
-
-        MVP 阶段：用简单规则拼接关键词，不调 LLM 生成。
+        """根据 Top Agent 下发的 core_topic + focus_areas 生成竞品搜索关键词。
 
         参数：
-            project_summary：项目描述
-            focus_areas：关注维度列表
+            task：Top Agent 下发的专属任务（含 core_topic + focus_areas）
+            project_summary：项目描述（仅当 core_topic 为空时 fallback 用）
 
         返回：
             搜索关键词列表（1-2 个）
         """
         queries: list[str] = []
-        core_topic = project_summary[:10] if len(project_summary) > 10 else project_summary
-        for area in focus_areas[:2]:
-            queries.append(f"{core_topic} {area}")
+        if task.core_topic:
+            core_topic = task.core_topic
+        elif project_summary:
+            core_topic = project_summary[:10] if len(project_summary) > 10 else project_summary
+        else:
+            core_topic = ""
+
+        for area in task.focus_areas[:2]:
+            prefix = f"{core_topic} " if core_topic else ""
+            queries.append(f"{prefix}{area}")
+
         return queries
 
     def _format_all_findings(

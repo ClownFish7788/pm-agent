@@ -146,6 +146,11 @@ class DepartmentTask(BaseModel):
         default="",
         description="特别指令（Phase 2 驳回时用，如'上次竞品分析漏了某某，这次重点看'）"
     )
+    core_topic: str = Field(
+        default="",
+        description="项目核心关键词（2-3个词），如'宠物社交App'，供中层拼接搜索词；"
+                    "由 Top Agent LLM 提取，避免硬截断 project_summary[:10] 腰斩语义"
+    )
 
 
 class ExecutionPlan(BaseModel):

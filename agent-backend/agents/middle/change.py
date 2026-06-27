@@ -59,7 +59,7 @@ class ChangeLeader:
         task: DepartmentTask,
     ) -> ChangeState:
         """执行当下改变分析。"""
-        search_queries = self._generate_search_queries(project_summary, task.focus_areas)
+        search_queries = self._generate_search_queries(task, project_summary)
         print(f"  ⚡ [ChangeLeader] 准备搜索 {len(search_queries)} 个方向:")
         for i, q in enumerate(search_queries, 1):
             print(f"      {i}. {q}")
@@ -141,14 +141,21 @@ class ChangeLeader:
         return state
 
     def _generate_search_queries(
-        self,
-        project_summary: str,
-        focus_areas: list[str],
+        self, task: DepartmentTask, project_summary: str = ""
     ) -> list[str]:
+        """根据 Top Agent 下发的 core_topic + focus_areas 生成启动策略搜索关键词。"""
         queries: list[str] = []
-        core_topic = project_summary[:10] if len(project_summary) > 10 else project_summary
-        for area in focus_areas[:2]:
-            queries.append(f"{core_topic} {area}")
+        if task.core_topic:
+            core_topic = task.core_topic
+        elif project_summary:
+            core_topic = project_summary[:10] if len(project_summary) > 10 else project_summary
+        else:
+            core_topic = ""
+
+        for area in task.focus_areas[:2]:
+            prefix = f"{core_topic} " if core_topic else ""
+            queries.append(f"{prefix}{area}")
+
         return queries
 
     def _format_all_findings(self, sub_slots: dict[str, SubAgentSlot]) -> str:
