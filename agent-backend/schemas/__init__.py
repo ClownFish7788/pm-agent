@@ -129,35 +129,50 @@ class Message(BaseModel):
 # =============================================================================
 
 
-class ExecutionPlan(BaseModel):
-    """顶层 Agent 生成的 DAG 执行计划。
+class DepartmentTask(BaseModel):
+    """顶层 Agent 给一个中层部门下达的专属任务。
 
-    顶层 Agent 读完用户的项目描述后，决定：
-    1. 哪些中层需要跑（market / competitor / product / future / change）
-    2. 谁先谁后（串行顺序），谁能同时跑（并行）
-    3. 谁直接被跳过（比如做一个开源工具类项目，可能不需要竞品分析）
-
-    MVP 阶段：只跑 market_research，其余全部 skipped。
+    每个部门收到自己的 DepartmentTask，不再共用全局 focus_areas。
+    Phase 2 时 instruction 字段用于驳回后的重做指令。
     """
-    steps: list[MiddleAgentType] = Field(
-        description="按执行顺序排列的中层 Agent 列表。"
-                    "相同优先级的可以并行；MVP 只放一个 MARKET_RESEARCH"
-    )
-    skipped: list[MiddleAgentType] = Field(
-        default_factory=list,
-        description="被跳过的中层 Agent 列表及跳过原因"
-    )
-    skip_reasons: dict[str, str] = Field(
-        default_factory=dict,
-        description="跳过原因映射，key = MiddleAgentType.value，value = 原因文字"
+    agent_type: MiddleAgentType = Field(
+        description="目标中层部门类型，如 MARKET_RESEARCH"
     )
     focus_areas: list[str] = Field(
         default_factory=list,
-        description="本次分析需要重点关注的维度，如 ['市场规模', '用户画像', '商业模式']"
+        description="该部门专属的关注维度，如 ['宠物社交市场规模', '养宠用户画像']"
+    )
+    instruction: str = Field(
+        default="",
+        description="特别指令（Phase 2 驳回时用，如'上次竞品分析漏了某某，这次重点看'）"
+    )
+
+
+class ExecutionPlan(BaseModel):
+    """顶层 Agent 生成的 DAG 执行计划。
+
+    顶层 Agent 读完用户的项目描述后，为每个需要跑的中层部门，
+    各自生成专属的 DepartmentTask（含 focus_areas 和 instruction）。
+
+    Phase 2 时：
+    - 条件边根据 tasks 决定谁跑谁跳过
+    - 驳回时修改对应 DepartmentTask 的 instruction
+    """
+    tasks: list[DepartmentTask] = Field(
+        default_factory=list,
+        description="需要执行的中层任务列表，每个任务专属一个部门"
+    )
+    skipped: list[MiddleAgentType] = Field(
+        default_factory=list,
+        description="被跳过的中层部门列表"
+    )
+    skip_reasons: dict[str, str] = Field(
+        default_factory=dict,
+        description="跳过原因，key = MiddleAgentType.value"
     )
     max_cycles: int = Field(
         default=3,
-        description="每个中层最多被驳回几次。MVP 阶段固定为 3 但不启用驳回"
+        description="每个中层最多被驳回几次"
     )
 
 
@@ -197,27 +212,29 @@ class Finding(BaseModel):
     )
 
 
-class SubAgentOutput(BaseModel):
-    """底层搜索 Agent 的标准化输出。
+class BottomReport(BaseModel):
+    """底层研究员产出的调研报告。
 
-    这是所有底层 Agent 必须遵守的输出格式。中层 Leader 接收这个对象，
-    不做任何格式转换，保证接口统一。
+    不再是纯数据提取（SubAgentOutput），而是：
+    1. 筛选：去掉低质、重复、广告
+    2. 归类：按主题聚合相关结果
+    3. 报告：撰写 ≤500 字综合判断
+    4. 索引：保留每条发现的 source_url，中层可回查
 
-    字段说明：
-    - summary：一句话总结（≤ 80 字），中层 Leader 第一步先扫描所有 summary 快速定位
-    - top_findings：按相关度降序排列的发现列表，最多 5 条
-    - total_results：Tavily 返回的原始搜索结果总数（用于参考，不影响分析）
+    中层 Leader 收到这个后，既能看到底层的研究结论（report），
+    也能核实原始数据（key_findings）。
     """
-    summary: str = Field(
-        description="一句话总结本此搜索的核心发现，≤ 80 字"
+    report: str = Field(
+        default="",
+        description="底层研究员撰写的综合分析报告，≤ 500 字"
     )
-    top_findings: list[Finding] = Field(
+    key_findings: list[Finding] = Field(
         default_factory=list,
-        description="按相关度(relevance)降序排列的发现列表，最多 5 条"
+        description="按相关度降序的关键发现，最多 5 条，每条含 source_url"
     )
-    total_results: int = Field(
+    total_sources: int = Field(
         default=0,
-        description="原始搜索返回的总结果数（供中层参考数据量级）"
+        description="本次搜索返回的原始结果总数（含被筛选掉的）"
     )
 
 
@@ -290,8 +307,8 @@ class SubAgentSlot(BaseModel):
     """
     sub_id: str = Field(description="子 Agent 的唯一标识，如 'market_size_query'")
     search_query: str = Field(default="", description="当前使用的搜索关键词")
-    latest_output: SubAgentOutput | None = Field(
-        default=None, description="最新一轮 LLM 输出（只保留最新，旧数据被覆盖）"
+    latest_output: BottomReport | None = Field(
+        default=None, description="最新一轮底层研究报告（只保留最新，旧数据被覆盖）"
     )
     round_number: int = Field(default=1, description="当前是第几轮（1-indexed），MVP 固定为 1")
     rejection_log: list[RejectionEntry] = Field(
