@@ -349,6 +349,21 @@ class MarketResearchState(BaseModel):
         description="本部门整体可信度（0.0~1.0），基于来源权威度加权"
     )
 
+    # ===== 部门判断（CEO 读取的决策级输出） =====
+    conclusion: str = Field(
+        default="",
+        description="部门结论（≤ 200 字）。不是数据复述，而是该领域专家的核心判断——"
+                    "「基于以上数据，我认为...」"
+    )
+    recommendations: list[str] = Field(
+        default_factory=list,
+        description="部门给 CEO 的建议（≤ 3 条），每条 ≤ 100 字"
+    )
+    gaps: list[str] = Field(
+        default_factory=list,
+        description="本部门数据缺口（≤ 3 条），明确标注哪些维度数据不足"
+    )
+
     # ===== 控制状态 =====
     status: AgentStatus = Field(default=AgentStatus.IDLE, description="本部门当前状态")
 
@@ -368,44 +383,56 @@ class MarketResearchState(BaseModel):
 
 
 class CompetitorState(BaseModel):
-    """竞品分析中层 State —— 【MVP 预留壳子】"""
+    """竞品分析中层 State。"""
     summary: str | None = None
     key_points: list[AnalysisPoint] = Field(default_factory=list)
     overall_confidence: float = 0.0
     status: AgentStatus = AgentStatus.IDLE
+    conclusion: str = Field(default="", description="部门结论（≤ 200 字）")
+    recommendations: list[str] = Field(default_factory=list, description="部门建议（≤ 3 条）")
+    gaps: list[str] = Field(default_factory=list, description="数据缺口（≤ 3 条）")
     project: dict = Field(default_factory=dict)
     sub_agents: dict[str, SubAgentSlot] = Field(default_factory=dict)
     cycle_count: int = 0
 
 
 class ProductDesignState(BaseModel):
-    """产品设计中层 State —— 【MVP 预留壳子】"""
+    """产品设计中层 State。"""
     summary: str | None = None
     key_points: list[AnalysisPoint] = Field(default_factory=list)
     overall_confidence: float = 0.0
     status: AgentStatus = AgentStatus.IDLE
+    conclusion: str = Field(default="", description="部门结论（≤ 200 字）")
+    recommendations: list[str] = Field(default_factory=list, description="部门建议（≤ 3 条）")
+    gaps: list[str] = Field(default_factory=list, description="数据缺口（≤ 3 条）")
     project: dict = Field(default_factory=dict)
     sub_agents: dict[str, SubAgentSlot] = Field(default_factory=dict)
     cycle_count: int = 0
 
 
 class FutureState(BaseModel):
-    """未来方向中层 State —— 【MVP 预留壳子】"""
+    """未来方向中层 State。"""
     summary: str | None = None
     key_points: list[AnalysisPoint] = Field(default_factory=list)
     overall_confidence: float = 0.0
     status: AgentStatus = AgentStatus.IDLE
+    conclusion: str = Field(default="", description="部门结论（≤ 200 字）")
+    recommendations: list[str] = Field(default_factory=list, description="部门建议（≤ 3 条）")
+    gaps: list[str] = Field(default_factory=list, description="数据缺口（≤ 3 条）")
     project: dict = Field(default_factory=dict)
     sub_agents: dict[str, SubAgentSlot] = Field(default_factory=dict)
     cycle_count: int = 0
 
 
 class ChangeState(BaseModel):
-    """当下改变中层 State —— 【MVP 预留壳子】"""
+    """当下改变中层 State。"""
     summary: str | None = None
     key_points: list[AnalysisPoint] = Field(default_factory=list)
     overall_confidence: float = 0.0
     status: AgentStatus = AgentStatus.IDLE
+    conclusion: str = Field(default="", description="部门结论（≤ 200 字）")
+    recommendations: list[str] = Field(default_factory=list, description="部门建议（≤ 3 条）")
+    gaps: list[str] = Field(default_factory=list, description="数据缺口（≤ 3 条）")
     project: dict = Field(default_factory=dict)
     sub_agents: dict[str, SubAgentSlot] = Field(default_factory=dict)
     cycle_count: int = 0
@@ -519,32 +546,44 @@ class RiskFlag(BaseModel):
 class FinalReport(BaseModel):
     """Top Agent（CEO）综合各中层结果后产出的最终报告。
 
-    这不是中层数据的简单罗列，而是跨部门交叉分析后的战略级输出。
+    结构：执行摘要 → 各部门报告 → 交叉洞察 → 战略建议 → 风险 → 评分。
+    不是中层数据的简单罗列，而是跨部门交叉分析后的战略级输出。
     """
 
+    # ===== 一、执行摘要（300~800 字） =====
     executive_summary: str = Field(
-        default="", description="≤ 300 字执行摘要，CEO 一句话说清结论"
+        default="",
+        description="执行摘要（300~800 字），包含：项目概述、核心市场判断、"
+                    "最关键的机会与风险、综合结论。不是一句话，而是完整的决策摘要",
     )
+
+    # ===== 二、各部门报告（CEO 对每个部门的提炼 + 部门自己的判断） =====
+    department_summaries: dict[str, str] = Field(
+        default_factory=dict,
+        description="各部门摘要。key=部门名，value=CEO提炼的该部门要点（含部门结论和建议，≤300字/部门）",
+    )
+
+    # ===== 三、综合评分 =====
     overall_score: float = Field(
         default=50.0, description="项目综合可行性评分 0-100"
     )
 
-    # 跨部门交叉洞察
+    # ===== 四、跨部门交叉洞察 =====
     cross_insights: list[CrossInsight] = Field(
         default_factory=list, description="跨部门交叉洞察（≤ 5 条）"
     )
 
-    # 战略建议
+    # ===== 五、战略建议 =====
     recommendations: list[Recommendation] = Field(
         default_factory=list, description="按优先级排列的战略建议（≤ 5 条）"
     )
 
-    # 风险
+    # ===== 六、风险与不确定性 =====
     risks: list[RiskFlag] = Field(
         default_factory=list, description="风险与不确定性（≤ 5 条）"
     )
 
-    # 各维度信心
+    # ===== 七、各部门可信度 =====
     dimension_confidence: dict[str, float] = Field(
         default_factory=dict,
         description="各中层部门的整体可信度汇总",

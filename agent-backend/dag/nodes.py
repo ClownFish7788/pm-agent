@@ -387,7 +387,7 @@ async def node_aggregate(
         report: FinalReport = await llm.chat_structured(
             messages=messages,
             output_schema=FinalReport,
-            max_tokens=4096,
+            max_tokens=16384,  # CEO 七段报告，需大量输出
         )
     except Exception as e:
         log_error("node_aggregate", f"CEO 汇总分析失败: {type(e).__name__}: {e}")
@@ -413,76 +413,136 @@ async def node_aggregate(
 # =============================================================================
 
 def _print_ceo_report(report: FinalReport, state: GlobalState) -> None:
-    """格式化打印 CEO 交叉分析报告。
+    """格式化打印多段式 CEO 综合分析报告。
 
     参数：
         report：LLM 产出的 FinalReport
         state：全局状态（用于统计）
     """
-    print(f"\n  {'=' * 56}")
-    print(f"  📋 CEO 综合分析报告")
-    print(f"  {'=' * 56}")
+    dept_icons = {
+        "market_research": "📊 市场调研",
+        "competitor_analysis": "🏢 竞品分析",
+        "product_design": "🎨 产品设计",
+        "future_direction": "🔮 未来方向",
+        "change_plan": "⚡ 当下改变",
+    }
 
-    # 执行摘要
-    print(f"\n  ┌─ 📝 执行摘要 ─────────────────────────────")
-    print(f"  │ {report.executive_summary[:300]}")
-    print(f"  └──────────────────────────────────────────")
+    print(f"\n  {'=' * 64}")
+    print(f"  📋 PM Agent CEO 综合分析报告")
+    print(f"  {'=' * 64}")
 
-    # 综合评分
+    # === 一、执行摘要 ===
+    print(f"\n  {'─' * 64}")
+    print(f"  一、执行摘要")
+    print(f"  {'─' * 64}")
+    print(f"  {report.executive_summary}")
+
+    # === 二、各部门报告 ===
+    print(f"\n  {'─' * 64}")
+    print(f"  二、各部门分析报告")
+    print(f"  {'─' * 64}")
+
+    for dept_key, dept_label in dept_icons.items():
+        ceo_summary = report.department_summaries.get(dept_key, "")
+        dept_state = getattr(state, dept_key, None)
+
+        print(f"\n  {dept_label}")
+        print(f"  {'─' * 48}")
+
+        if ceo_summary:
+            print(f"  CEO 提炼: {ceo_summary}")
+        elif dept_state is None:
+            print(f"  ⚠️ 该部门未产出结果")
+            continue
+        else:
+            print(f"  (无 CEO 提炼)")
+
+        if dept_state is not None:
+            conf = getattr(dept_state, "overall_confidence", 0.0)
+            status = getattr(dept_state, "status", None)
+            status_str = status.value if hasattr(status, "value") else "?"
+            conclusion = getattr(dept_state, "conclusion", "") or ""
+            recommendations = getattr(dept_state, "recommendations", []) or []
+            gaps = getattr(dept_state, "gaps", []) or []
+
+            print(f"  可信度: {conf:.0%} | 状态: {status_str}")
+
+            if conclusion:
+                print(f"  ┌ 部门结论: {conclusion}")
+            if recommendations:
+                print(f"  ┌ 部门建议:")
+                for r in recommendations:
+                    print(f"  │ • {r}")
+            if gaps:
+                print(f"  ┌ 数据缺口:")
+                for g in gaps:
+                    print(f"  │ • {g}")
+
+            key_points = getattr(dept_state, "key_points", [])
+            if key_points:
+                print(f"  ┌ 分析要点 ({len(key_points)} 条):")
+                for kp in key_points:
+                    title = getattr(kp, "title", "")
+                    conf_level = getattr(kp, "confidence_level", "")
+                    print(f"  │ [{conf_level}] {title}")
+
+    # === 三、综合评分 ===
     score = report.overall_score
     score_bar = "█" * int(score / 10) + "░" * (10 - int(score / 10))
     score_emoji = "🟢" if score >= 70 else ("🟡" if score >= 40 else "🔴")
-    print(f"\n  ┌─ 📊 综合可行性评分 ──────────────────────")
-    print(f"  │ {score_emoji} {score:.0f}/100  [{score_bar}]")
-    print(f"  └──────────────────────────────────────────")
+    print(f"\n  {'─' * 64}")
+    print(f"  三、综合可行性评分")
+    print(f"  {'─' * 64}")
+    print(f"  {score_emoji} {score:.0f}/100  [{score_bar}]")
 
-    # 跨部门交叉洞察
-    print(f"\n  ┌─ 🔗 跨部门交叉洞察 ({len(report.cross_insights)} 条) ───")
+    # === 四、跨部门交叉洞察 ===
+    print(f"\n  {'─' * 64}")
+    print(f"  四、跨部门交叉洞察 ({len(report.cross_insights)} 条)")
+    print(f"  {'─' * 64}")
     for i, ci in enumerate(report.cross_insights, 1):
         dims = ", ".join(ci.involved_dimensions) if ci.involved_dimensions else "无"
-        print(f"  │")
-        print(f"  │ {i}. {ci.title}")
-        print(f"  │    {ci.insight[:200]}")
-        print(f"  │    🏷️ 涉及: {dims} | 置信度: {ci.confidence:.0%}")
+        print(f"\n  {i}. {ci.title}")
+        print(f"     {ci.insight}")
+        print(f"     🏷️ 涉及: {dims} | 置信度: {ci.confidence:.0%}")
     if not report.cross_insights:
-        print(f"  │ (无交叉洞察)")
-    print(f"  └──────────────────────────────────────────")
+        print(f"  (无交叉洞察)")
 
-    # 战略建议
-    print(f"\n  ┌─ 💡 战略建议 ({len(report.recommendations)} 条) ──────")
+    # === 五、战略建议 ===
+    print(f"\n  {'─' * 64}")
+    print(f"  五、综合战略建议 ({len(report.recommendations)} 条)")
+    print(f"  {'─' * 64}")
     for i, rec in enumerate(report.recommendations, 1):
         dims = ", ".join(rec.related_dimensions) if rec.related_dimensions else "无"
-        print(f"  │")
-        print(f"  │ P{rec.priority} [{i}] {rec.title}")
-        print(f"  │     {rec.rationale[:200]}")
-        print(f"  │     🏷️ 依据: {dims}")
-    print(f"  └──────────────────────────────────────────")
+        print(f"\n  P{rec.priority} [{i}] {rec.title}")
+        print(f"     {rec.rationale}")
+        print(f"     🏷️ 依据: {dims}")
 
-    # 风险
-    print(f"\n  ┌─ ⚠️ 风险与不确定性 ({len(report.risks)} 条) ──────")
+    # === 六、风险 ===
+    print(f"\n  {'─' * 64}")
+    print(f"  六、风险与不确定性 ({len(report.risks)} 条)")
+    print(f"  {'─' * 64}")
     for i, risk in enumerate(report.risks, 1):
         sev_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(risk.severity, "⚪")
-        print(f"  │")
-        print(f"  │ {sev_emoji} [{risk.severity}] {risk.title}")
-        print(f"  │    {risk.description[:150]}")
-        print(f"  │    🏷️ 来源: {risk.related_dimension}")
+        print(f"\n  {sev_emoji} [{risk.severity}] {risk.title}")
+        print(f"     {risk.description}")
+        print(f"     🏷️ 来源: {risk.related_dimension}")
     if not report.risks:
-        print(f"  │ (无显著风险)")
-    print(f"  └──────────────────────────────────────────")
+        print(f"  (无显著风险)")
 
-    # 各部门信心
-    print(f"\n  ┌─ 📊 各部门可信度 ─────────────────────────")
+    # === 七、各部门可信度 ===
+    print(f"\n  {'─' * 64}")
+    print(f"  七、各部门可信度")
+    print(f"  {'─' * 64}")
     for dim, conf in report.dimension_confidence.items():
         bar = "█" * int(conf * 10) + "░" * (10 - int(conf * 10))
-        print(f"  │ {dim:25s} {conf:.0%} [{bar}]")
-    print(f"  └──────────────────────────────────────────")
+        label = dept_icons.get(dim, dim)
+        print(f"  {label:20s} {conf:.0%} [{bar}]")
 
-    # 全局统计
-    print(f"\n  {'─' * 56}")
+    # === 全局统计 ===
+    print(f"\n  {'=' * 64}")
     print(f"  📊 LLM API 调用: {state.total_api_calls} / {state.max_api_calls}")
     print(f"  📊 非致命错误: {len(state.errors)} 条")
     for err in state.errors:
         print(f"    ⚠️  {err}")
-
     print(f"\n  ✅ 分析完成")
-    print(f"  {'─' * 56}\n")
+    print(f"  {'=' * 64}\n")
