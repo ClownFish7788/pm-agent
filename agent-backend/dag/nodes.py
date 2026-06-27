@@ -21,6 +21,7 @@ MVP 节点：
 from __future__ import annotations
 
 from agents.middle.market import MarketLeader
+from agents.middle.competitor import CompetitorLeader
 from llm.base import BaseLLMProvider
 from prompts.templates import build_top_agent_prompt
 from schemas import (
@@ -80,16 +81,16 @@ async def node_top_planning(
         )
     except Exception as e:
         log_error("node_top_planning", f"LLM 调用失败: {type(e).__name__}: {e}")
-        # 失败时使用默认计划
+        # 失败时使用默认计划（市场 + 竞品并行）
         plan = ExecutionPlan(
-            steps=[MiddleAgentType.MARKET_RESEARCH],
-            skipped=[m for m in MiddleAgentType if m != MiddleAgentType.MARKET_RESEARCH],
+            steps=[MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS],
+            skipped=[m for m in MiddleAgentType if m not in (MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS)],
             skip_reasons={
-                m.value: "MVP 阶段仅启用市场调研"
+                m.value: "MVP 阶段未实现"
                 for m in MiddleAgentType
-                if m != MiddleAgentType.MARKET_RESEARCH
+                if m not in (MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS)
             },
-            focus_areas=["市场规模", "用户画像"],
+            focus_areas=["市场规模", "用户画像", "商业模式"],
             max_cycles=3,
         )
 
@@ -173,7 +174,61 @@ async def node_market_research(
     return {
         "market_research": market_state,
         "total_api_calls": llm.call_count,
-        "current_phase": "market_done",
+    }
+
+
+# =============================================================================
+# 节点 2b：竞品分析（可与市场调研并行）
+# =============================================================================
+
+async def node_competitor_analysis(
+    state: GlobalState,
+    llm: BaseLLMProvider,
+    search_provider: BaseSearchProvider,
+) -> dict:
+    """DAG 节点 2b —— 中层竞品分析 Leader 执行。
+
+    与市场调研节点结构一致，可并行执行（LangGraph 自动 fan-out）。
+
+    职责：
+    1. 读取顶层 ExecutionPlan 中的 focus_areas
+    2. 创建 CompetitorLeader 并执行
+    3. 将结果填入 state.competitor_analysis
+
+    参数：
+        state：当前 GlobalState
+        llm：LLM Provider
+        search_provider：Search Provider
+
+    返回：
+        dict 包含 competitor_analysis、total_api_calls 的更新
+    """
+    log_phase("DAG 节点 2b: 竞品分析 — 中层 Leader 执行")
+
+    plan = state.execution_plan
+    if plan is None:
+        log_error("node_competitor_analysis", "执行计划为空，跳过竞品分析")
+        return {"errors": state.errors + ["执行计划为空，竞品分析跳过"]}
+
+    project_summary = state.project.description
+    # 竞品分析使用独立的搜索方向
+    competitor_focus = ["直接竞品", "功能对比", "差异化机会"]
+
+    competitor_leader = CompetitorLeader(
+        llm=llm,
+        search_provider=search_provider,
+    )
+
+    competitor_state = await competitor_leader.run(
+        project_summary=project_summary,
+        focus_areas=competitor_focus,
+    )
+
+    log_budget(llm.call_count, state.max_api_calls)
+
+    return {
+        "competitor_analysis": competitor_state,
+        "total_api_calls": llm.call_count,
     }
 
 
@@ -230,8 +285,33 @@ async def node_aggregate(state: GlobalState) -> dict:
         print(f"\n  【市场调研】⚠️ 无数据")
         errors.append("市场调研未产生结果")
 
+    # ---- 竞品分析看板 ----
+    competitor = state.competitor_analysis
+    if competitor is not None:
+        print(f"\n  【竞品分析】")
+        print(f"  整体可信度: {competitor.overall_confidence:.0%}")
+        print(f"  状态: {competitor.status.value}")
+        if competitor.summary:
+            print(f"  摘要: {competitor.summary}")
+        print(f"\n  分析要点 ({len(competitor.key_points)} 条):")
+
+        for i, point in enumerate(competitor.key_points, 1):
+            confidence_label = {
+                "high": "🟢高",
+                "medium": "🟡中",
+                "low": "🟠低",
+                "uncertain": "🔴存疑",
+            }.get(point.confidence_level, "⚪未知")
+
+            print(f"\n    {i}. [{confidence_label}] {point.title}")
+            print(f"       {point.content}")
+            print(f"       📎 来源数: {point.source_count}")
+    else:
+        print(f"\n  【竞品分析】⚠️ 无数据")
+        errors.append("竞品分析未产生结果")
+
     # ---- 其余中层（MVP 为 None） ----
-    for name in ["competitor_analysis", "product_design", "future_direction", "change_plan"]:
+    for name in ["product_design", "future_direction", "change_plan"]:
         val = getattr(state, name, None)
         if val is not None:
             print(f"\n  【{name}】(预留)")

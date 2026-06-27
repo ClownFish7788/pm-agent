@@ -26,9 +26,19 @@ PM Agent 系统的全部数据模型定义。
 from __future__ import annotations
 
 from enum import Enum
+from operator import add as _op_add
 from typing import Literal, TypedDict, Annotated
 
 from pydantic import BaseModel, Field
+
+
+# =============================================================================
+# LangGraph 并行节点 Reducer 辅助函数
+# =============================================================================
+
+def _max_reducer(a: int, b: int) -> int:
+    """并行节点写入 int 字段时取最大值（call_count 只增不减）。"""
+    return max(a, b)
 
 
 # =============================================================================
@@ -449,10 +459,16 @@ class GlobalState(BaseModel):
     )
 
     # ===== 全局控制 =====
-    total_api_calls: int = Field(default=0, description="已消耗的 LLM API 调用次数")
+    # total_api_calls 用 max reducer：并行节点都写绝对值，取最新值即可
+    total_api_calls: Annotated[int, _max_reducer] = Field(
+        default=0, description="已消耗的 LLM API 调用次数"
+    )
     max_api_calls: int = Field(default=30, description="LLM 调用硬上限（熔断器）")
     current_phase: str = Field(default="init", description="当前执行阶段标识")
-    errors: list[str] = Field(default_factory=list, description="非致命错误收集")
+    # errors 用 add reducer：并行节点各自追加错误，不会被覆盖
+    errors: Annotated[list[str], _op_add] = Field(
+        default_factory=list, description="非致命错误收集"
+    )
 
 
 # =============================================================================

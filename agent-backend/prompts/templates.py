@@ -54,10 +54,11 @@ TOP_AGENT_SYSTEM_PROMPT = """\
 
 ## 规则
 
-1. **MVP 阶段**：steps 中只放 "market_research"，其余全部放入 skipped
-2. focus_areas 根据项目类型列出 2-4 个重点关注的维度
-3. max_cycles 固定为 3（预留，MVP 不启用驳回）
-4. skip_reasons 中对每个跳过的维度给出简短原因（≤ 20 字）
+1. steps 中根据需要放入 "market_research" 和/或 "competitor_analysis"，其余放入 skipped
+2. 如果用户项目描述中包含了竞品信息或提到了竞争对手，务必加入 competitor_analysis
+3. focus_areas 根据项目类型列出 2-4 个重点关注的维度
+4. max_cycles 固定为 3（预留，MVP 不启用驳回）
+5. skip_reasons 中对每个跳过的维度给出简短原因（≤ 20 字）
 """
 
 

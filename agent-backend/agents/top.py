@@ -25,6 +25,7 @@ MVP 简化：
 from __future__ import annotations
 
 from agents.middle.market import MarketLeader
+from agents.middle.competitor import CompetitorLeader
 from llm.base import BaseLLMProvider
 from prompts.templates import build_top_agent_prompt
 from schemas import (
@@ -138,12 +139,12 @@ class TopAgent:
             state.total_api_calls = self.llm.call_count  # LLM Provider 内部自动计数
         except Exception as e:
             log_error("TopAgent", f"生成执行计划失败: {type(e).__name__}: {e}")
-            # 失败时使用默认计划（只跑市场调研）
+            # 失败时使用默认计划（市场 + 竞品并行）
             state.execution_plan = ExecutionPlan(
-                steps=[MiddleAgentType.MARKET_RESEARCH],
-                skipped=[m for m in MiddleAgentType if m != MiddleAgentType.MARKET_RESEARCH],
-                skip_reasons={m.value: "MVP 阶段仅启用市场调研" for m in MiddleAgentType if m != MiddleAgentType.MARKET_RESEARCH},
-                focus_areas=["市场规模", "用户画像"],
+                steps=[MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS],
+                skipped=[m for m in MiddleAgentType if m not in (MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS)],
+                skip_reasons={m.value: "MVP 阶段未实现" for m in MiddleAgentType if m not in (MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS)},
+                focus_areas=["市场规模", "用户画像", "商业模式"],
                 max_cycles=3,
             )
 
@@ -210,6 +211,22 @@ class TopAgent:
                 state.market_research = market_state
 
                 # LLM 调用次数由 Provider 内部自动计数，直接读即可
+                state.total_api_calls = self.llm.call_count
+
+            elif step_type == MiddleAgentType.COMPETITOR_ANALYSIS:
+                state.current_phase = "competitor_analysis"
+
+                competitor_leader = CompetitorLeader(
+                    llm=self.llm,
+                    search_provider=self.search_provider,
+                )
+
+                competitor_state = await competitor_leader.run(
+                    project_summary=project_summary,
+                    focus_areas=["直接竞品", "功能对比", "差异化机会"],
+                )
+
+                state.competitor_analysis = competitor_state
                 state.total_api_calls = self.llm.call_count
 
             else:
