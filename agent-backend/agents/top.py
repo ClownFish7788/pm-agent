@@ -27,6 +27,8 @@ from __future__ import annotations
 from agents.middle.market import MarketLeader
 from agents.middle.competitor import CompetitorLeader
 from agents.middle.product import ProductLeader
+from agents.middle.future import FutureLeader
+from agents.middle.change import ChangeLeader
 from llm.base import BaseLLMProvider
 from prompts.templates import build_top_agent_prompt
 from schemas import (
@@ -140,12 +142,11 @@ class TopAgent:
             state.total_api_calls = self.llm.call_count  # LLM Provider 内部自动计数
         except Exception as e:
             log_error("TopAgent", f"生成执行计划失败: {type(e).__name__}: {e}")
-            # 失败时使用默认计划（市场 + 竞品 + 产品并行）
-            enabled = (MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS, MiddleAgentType.PRODUCT_DESIGN)
+            # 失败时使用默认计划（全部 5 个中层并行）
             state.execution_plan = ExecutionPlan(
-                steps=list(enabled),
-                skipped=[m for m in MiddleAgentType if m not in enabled],
-                skip_reasons={m.value: "MVP 阶段未实现" for m in MiddleAgentType if m not in enabled},
+                steps=list(MiddleAgentType),
+                skipped=[],
+                skip_reasons={},
                 focus_areas=["市场规模", "用户画像", "商业模式"],
                 max_cycles=3,
             )
@@ -245,6 +246,26 @@ class TopAgent:
                 )
 
                 state.product_design = product_state
+                state.total_api_calls = self.llm.call_count
+
+            elif step_type == MiddleAgentType.FUTURE_DIRECTION:
+                state.current_phase = "future_direction"
+                future_leader = FutureLeader(llm=self.llm, search_provider=self.search_provider)
+                future_state = await future_leader.run(
+                    project_summary=project_summary,
+                    focus_areas=["技术趋势", "市场演进", "新兴机会"],
+                )
+                state.future_direction = future_state
+                state.total_api_calls = self.llm.call_count
+
+            elif step_type == MiddleAgentType.CHANGE_PLAN:
+                state.current_phase = "change_plan"
+                change_leader = ChangeLeader(llm=self.llm, search_provider=self.search_provider)
+                change_state = await change_leader.run(
+                    project_summary=project_summary,
+                    focus_areas=["冷启动", "资源需求", "增长策略"],
+                )
+                state.change_plan = change_state
                 state.total_api_calls = self.llm.call_count
 
             else:

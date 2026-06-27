@@ -23,6 +23,8 @@ from __future__ import annotations
 from agents.middle.market import MarketLeader
 from agents.middle.competitor import CompetitorLeader
 from agents.middle.product import ProductLeader
+from agents.middle.future import FutureLeader
+from agents.middle.change import ChangeLeader
 from llm.base import BaseLLMProvider
 from prompts.templates import build_top_agent_prompt
 from schemas import (
@@ -96,12 +98,11 @@ async def node_top_planning(
         )
     except Exception as e:
         log_error("node_top_planning", f"LLM 调用失败: {type(e).__name__}: {e}")
-        # 失败时使用默认计划（市场 + 竞品 + 产品并行）
-        enabled = (MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS, MiddleAgentType.PRODUCT_DESIGN)
+        # 失败时使用默认计划（全部 5 个中层并行）
         plan = ExecutionPlan(
-            steps=list(enabled),
-            skipped=[m for m in MiddleAgentType if m not in enabled],
-            skip_reasons={m.value: "MVP 阶段未实现" for m in MiddleAgentType if m not in enabled},
+            steps=list(MiddleAgentType),
+            skipped=[],
+            skip_reasons={},
             focus_areas=["市场规模", "用户画像", "商业模式"],
             max_cycles=3,
         )
@@ -291,6 +292,56 @@ async def node_product_design(
 
 
 # =============================================================================
+# 节点 2d：未来方向（可与其他中层并行）
+# =============================================================================
+
+async def node_future_direction(
+    state: GlobalState,
+    llm: BaseLLMProvider,
+    search_provider: BaseSearchProvider,
+) -> dict:
+    """DAG 节点 2d —— 中层未来方向 Leader 执行。"""
+    log_phase("DAG 节点 2d: 未来方向 — 中层 Leader 执行")
+
+    future_leader = FutureLeader(llm=llm, search_provider=search_provider)
+    future_state = await future_leader.run(
+        project_summary=state.project.description,
+        focus_areas=["技术趋势", "市场演进", "新兴机会"],
+    )
+
+    log_budget(llm.call_count, state.max_api_calls)
+    return {
+        "future_direction": future_state,
+        "total_api_calls": llm.call_count,
+    }
+
+
+# =============================================================================
+# 节点 2e：当下改变（可与其他中层并行）
+# =============================================================================
+
+async def node_change_plan(
+    state: GlobalState,
+    llm: BaseLLMProvider,
+    search_provider: BaseSearchProvider,
+) -> dict:
+    """DAG 节点 2e —— 中层当下改变 Leader 执行。"""
+    log_phase("DAG 节点 2e: 当下改变 — 中层 Leader 执行")
+
+    change_leader = ChangeLeader(llm=llm, search_provider=search_provider)
+    change_state = await change_leader.run(
+        project_summary=state.project.description,
+        focus_areas=["冷启动", "资源需求", "增长策略"],
+    )
+
+    log_budget(llm.call_count, state.max_api_calls)
+    return {
+        "change_plan": change_state,
+        "total_api_calls": llm.call_count,
+    }
+
+
+# =============================================================================
 # 节点 3：汇总报告
 # =============================================================================
 
@@ -375,8 +426,46 @@ async def node_aggregate(state: GlobalState) -> dict:
         print(f"\n  【产品设计】⚠️ 无数据")
         errors.append("产品设计未产生结果")
 
-    # ---- 其余中层（MVP 为 None） ----
-    for name in ["future_direction", "change_plan"]:
+    # ---- 未来方向看板 ----
+    future = state.future_direction
+    if future is not None:
+        print(f"\n  【未来方向】")
+        print(f"  整体可信度: {future.overall_confidence:.0%}")
+        print(f"  状态: {future.status.value}")
+        if future.summary:
+            print(f"  摘要: {future.summary}")
+        print(f"\n  分析要点 ({len(future.key_points)} 条):")
+
+        for i, point in enumerate(future.key_points, 1):
+            confidence_label = _confidence_emoji(point.confidence_level)
+            print(f"\n    {i}. [{confidence_label}] {point.title}")
+            print(f"       {point.content}")
+            print(f"       📎 来源数: {point.source_count}")
+    else:
+        print(f"\n  【未来方向】⚠️ 无数据")
+        errors.append("未来方向未产生结果")
+
+    # ---- 当下改变看板 ----
+    change = state.change_plan
+    if change is not None:
+        print(f"\n  【当下改变】")
+        print(f"  整体可信度: {change.overall_confidence:.0%}")
+        print(f"  状态: {change.status.value}")
+        if change.summary:
+            print(f"  摘要: {change.summary}")
+        print(f"\n  分析要点 ({len(change.key_points)} 条):")
+
+        for i, point in enumerate(change.key_points, 1):
+            confidence_label = _confidence_emoji(point.confidence_level)
+            print(f"\n    {i}. [{confidence_label}] {point.title}")
+            print(f"       {point.content}")
+            print(f"       📎 来源数: {point.source_count}")
+    else:
+        print(f"\n  【当下改变】⚠️ 无数据")
+        errors.append("当下改变未产生结果")
+
+    # ---- 其余中层（MVP 全部实现） ----
+    for name in []:
         val = getattr(state, name, None)
         if val is not None:
             print(f"\n  【{name}】(预留)")
