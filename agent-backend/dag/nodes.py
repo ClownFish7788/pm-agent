@@ -28,6 +28,7 @@ from agents.middle.change import ChangeLeader
 from llm.base import BaseLLMProvider
 from prompts.templates import build_top_agent_prompt, build_ceo_summary_prompt
 from schemas import (
+    DepartmentTask,
     ExecutionPlan,
     FinalReport,
     GlobalState,
@@ -59,6 +60,14 @@ def _confidence_emoji(level: str) -> str:
         "low": "🟠低",
         "uncertain": "🔴存疑",
     }.get(level, "⚪未知")
+
+
+def _get_task(plan: ExecutionPlan, agent_type: MiddleAgentType) -> DepartmentTask | None:
+    """从执行计划中找指定部门的专属任务。"""
+    for t in plan.tasks:
+        if t.agent_type == agent_type:
+            return t
+    return None
 
 
 # =============================================================================
@@ -99,12 +108,11 @@ async def node_top_planning(
         )
     except Exception as e:
         log_error("node_top_planning", f"LLM 调用失败: {type(e).__name__}: {e}")
-        # 失败时使用默认计划（全部 5 个中层并行）
+        # 失败时使用默认计划（5 个部门各给默认方向）
         plan = ExecutionPlan(
-            steps=list(MiddleAgentType),
+            tasks=[DepartmentTask(agent_type=m, focus_areas=["市场规模", "用户画像"]) for m in MiddleAgentType],
             skipped=[],
             skip_reasons={},
-            focus_areas=["市场规模", "用户画像", "商业模式"],
             max_cycles=3,
         )
 
@@ -114,9 +122,8 @@ async def node_top_planning(
         agent_emoji="🔷",
         input_summary=f"项目: {project_text[:100]}",
         output={
-            "steps": [s.value for s in plan.steps],
+            "tasks": {t.agent_type.value: t.focus_areas for t in plan.tasks},
             "skipped": [s.value for s in plan.skipped],
-            "focus_areas": plan.focus_areas,
         },
     )
 
@@ -168,17 +175,19 @@ async def node_market_research(
         return {"errors": state.errors + ["执行计划为空，市场调研跳过"]}
 
     project_summary = state.project.description
-    focus_areas = plan.focus_areas if plan.focus_areas else ["市场规模", "用户画像"]
+
+    # 从 plan.tasks 找本部门的专属 task
+    task = _get_task(plan, MiddleAgentType.MARKET_RESEARCH)
+    if task is None:
+        log_skip("market_research", "顶层未分配任务")
+        return {}
 
     # ---- 创建并运行 MarketLeader ----
-    market_leader = MarketLeader(
-        llm=llm,
-        search_provider=search_provider,
-    )
+    market_leader = MarketLeader(llm=llm, search_provider=search_provider)
 
     market_state: MarketResearchState = await market_leader.run(
         project_summary=project_summary,
-        focus_areas=focus_areas,
+        task=task,
     )
 
     # ---- 统计 API 调用 ----
@@ -225,17 +234,17 @@ async def node_competitor_analysis(
         return {"errors": state.errors + ["执行计划为空，竞品分析跳过"]}
 
     project_summary = state.project.description
-    # 竞品分析使用独立的搜索方向
-    competitor_focus = ["直接竞品", "功能对比", "差异化机会"]
 
-    competitor_leader = CompetitorLeader(
-        llm=llm,
-        search_provider=search_provider,
-    )
+    task = _get_task(plan, MiddleAgentType.COMPETITOR_ANALYSIS)
+    if task is None:
+        log_skip("competitor_analysis", "顶层未分配任务")
+        return {}
+
+    competitor_leader = CompetitorLeader(llm=llm, search_provider=search_provider)
 
     competitor_state = await competitor_leader.run(
         project_summary=project_summary,
-        focus_areas=competitor_focus,
+        task=task,
     )
 
     log_budget(llm.call_count, state.max_api_calls)
@@ -272,16 +281,17 @@ async def node_product_design(
         return {"errors": state.errors + ["执行计划为空，产品设计跳过"]}
 
     project_summary = state.project.description
-    product_focus = ["功能设计", "MVP范围", "用户体验"]
 
-    product_leader = ProductLeader(
-        llm=llm,
-        search_provider=search_provider,
-    )
+    task = _get_task(plan, MiddleAgentType.PRODUCT_DESIGN)
+    if task is None:
+        log_skip("product_design", "顶层未分配任务")
+        return {}
+
+    product_leader = ProductLeader(llm=llm, search_provider=search_provider)
 
     product_state = await product_leader.run(
         project_summary=project_summary,
-        focus_areas=product_focus,
+        task=task,
     )
 
     log_budget(llm.call_count, state.max_api_calls)
@@ -304,10 +314,15 @@ async def node_future_direction(
     """DAG 节点 2d —— 中层未来方向 Leader 执行。"""
     log_phase("DAG 节点 2d: 未来方向 — 中层 Leader 执行")
 
+    task = _get_task(state.execution_plan, MiddleAgentType.FUTURE_DIRECTION)
+    if task is None:
+        log_skip("future_direction", "顶层未分配任务")
+        return {}
+
     future_leader = FutureLeader(llm=llm, search_provider=search_provider)
     future_state = await future_leader.run(
         project_summary=state.project.description,
-        focus_areas=["技术趋势", "市场演进", "新兴机会"],
+        task=task,
     )
 
     log_budget(llm.call_count, state.max_api_calls)
@@ -329,10 +344,15 @@ async def node_change_plan(
     """DAG 节点 2e —— 中层当下改变 Leader 执行。"""
     log_phase("DAG 节点 2e: 当下改变 — 中层 Leader 执行")
 
+    task = _get_task(state.execution_plan, MiddleAgentType.CHANGE_PLAN)
+    if task is None:
+        log_skip("change_plan", "顶层未分配任务")
+        return {}
+
     change_leader = ChangeLeader(llm=llm, search_provider=search_provider)
     change_state = await change_leader.run(
         project_summary=state.project.description,
-        focus_areas=["冷启动", "资源需求", "增长策略"],
+        task=task,
     )
 
     log_budget(llm.call_count, state.max_api_calls)

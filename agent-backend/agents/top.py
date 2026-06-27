@@ -32,6 +32,7 @@ from agents.middle.change import ChangeLeader
 from llm.base import BaseLLMProvider
 from prompts.templates import build_top_agent_prompt, build_ceo_summary_prompt
 from schemas import (
+    DepartmentTask,
     ExecutionPlan,
     FinalReport,
     GlobalState,
@@ -143,12 +144,11 @@ class TopAgent:
             state.total_api_calls = self.llm.call_count  # LLM Provider 内部自动计数
         except Exception as e:
             log_error("TopAgent", f"生成执行计划失败: {type(e).__name__}: {e}")
-            # 失败时使用默认计划（全部 5 个中层并行）
+            # 失败时使用默认计划
             state.execution_plan = ExecutionPlan(
-                steps=list(MiddleAgentType),
+                tasks=[DepartmentTask(agent_type=m, focus_areas=["市场规模", "用户画像"]) for m in MiddleAgentType],
                 skipped=[],
                 skip_reasons={},
-                focus_areas=["市场规模", "用户画像", "商业模式"],
                 max_cycles=3,
             )
 
@@ -162,9 +162,8 @@ class TopAgent:
             agent_emoji="🔷",
             input_summary=f"项目描述: {project_text[:100]}",
             output={
-                "steps": [s.value for s in plan.steps],
+                "tasks": {t.agent_type.value: t.focus_areas for t in plan.tasks},
                 "skipped": [s.value for s in plan.skipped],
-                "focus_areas": plan.focus_areas,
                 "max_cycles": plan.max_cycles,
             },
         )
@@ -195,83 +194,44 @@ class TopAgent:
 
         project_summary = state.project.description
 
-        for step_type in plan.steps:
-            if step_type == MiddleAgentType.MARKET_RESEARCH:
+        for task in plan.tasks:
+            if task.agent_type == MiddleAgentType.MARKET_RESEARCH:
                 state.current_phase = "market_research"
-
-                # 创建中层 Leader
-                market_leader = MarketLeader(
-                    llm=self.llm,
-                    search_provider=self.search_provider,
-                )
-
-                # 执行市场调研
-                market_state: MarketResearchState = await market_leader.run(
-                    project_summary=project_summary,
-                    focus_areas=plan.focus_areas,
-                )
-
-                # 填入全局 State
+                market_leader = MarketLeader(llm=self.llm, search_provider=self.search_provider)
+                market_state = await market_leader.run(project_summary=project_summary, task=task)
                 state.market_research = market_state
-
-                # LLM 调用次数由 Provider 内部自动计数，直接读即可
                 state.total_api_calls = self.llm.call_count
 
-            elif step_type == MiddleAgentType.COMPETITOR_ANALYSIS:
+            elif task.agent_type == MiddleAgentType.COMPETITOR_ANALYSIS:
                 state.current_phase = "competitor_analysis"
-
-                competitor_leader = CompetitorLeader(
-                    llm=self.llm,
-                    search_provider=self.search_provider,
-                )
-
-                competitor_state = await competitor_leader.run(
-                    project_summary=project_summary,
-                    focus_areas=["直接竞品", "功能对比", "差异化机会"],
-                )
-
+                competitor_leader = CompetitorLeader(llm=self.llm, search_provider=self.search_provider)
+                competitor_state = await competitor_leader.run(project_summary=project_summary, task=task)
                 state.competitor_analysis = competitor_state
                 state.total_api_calls = self.llm.call_count
 
-            elif step_type == MiddleAgentType.PRODUCT_DESIGN:
+            elif task.agent_type == MiddleAgentType.PRODUCT_DESIGN:
                 state.current_phase = "product_design"
-
-                product_leader = ProductLeader(
-                    llm=self.llm,
-                    search_provider=self.search_provider,
-                )
-
-                product_state = await product_leader.run(
-                    project_summary=project_summary,
-                    focus_areas=["功能设计", "MVP范围", "用户体验"],
-                )
-
+                product_leader = ProductLeader(llm=self.llm, search_provider=self.search_provider)
+                product_state = await product_leader.run(project_summary=project_summary, task=task)
                 state.product_design = product_state
                 state.total_api_calls = self.llm.call_count
 
-            elif step_type == MiddleAgentType.FUTURE_DIRECTION:
+            elif task.agent_type == MiddleAgentType.FUTURE_DIRECTION:
                 state.current_phase = "future_direction"
                 future_leader = FutureLeader(llm=self.llm, search_provider=self.search_provider)
-                future_state = await future_leader.run(
-                    project_summary=project_summary,
-                    focus_areas=["技术趋势", "市场演进", "新兴机会"],
-                )
+                future_state = await future_leader.run(project_summary=project_summary, task=task)
                 state.future_direction = future_state
                 state.total_api_calls = self.llm.call_count
 
-            elif step_type == MiddleAgentType.CHANGE_PLAN:
+            elif task.agent_type == MiddleAgentType.CHANGE_PLAN:
                 state.current_phase = "change_plan"
                 change_leader = ChangeLeader(llm=self.llm, search_provider=self.search_provider)
-                change_state = await change_leader.run(
-                    project_summary=project_summary,
-                    focus_areas=["冷启动", "资源需求", "增长策略"],
-                )
+                change_state = await change_leader.run(project_summary=project_summary, task=task)
                 state.change_plan = change_state
                 state.total_api_calls = self.llm.call_count
 
             else:
-                # 其他中层类型（MVP 阶段不会走到这里）
-                log_skip(step_type.value, "MVP 阶段未实现")
+                log_skip(task.agent_type.value, "未知任务类型")
 
         log_budget(state.total_api_calls, state.max_api_calls)
 
