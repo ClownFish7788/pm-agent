@@ -584,6 +584,129 @@ def build_search_agent_prompt(
 
 
 # =============================================================================
+# CEO 汇总 Prompt（跨部门交叉分析）
+# =============================================================================
+
+CEO_SUMMARY_SYSTEM_PROMPT = """\
+你是 PM Agent 的 CEO 汇总分析师。你会收到来自 5 个中层部门（市场调研、竞品分析、
+产品设计、未来方向、当下改变）各自产出的分析报告。
+
+## 你的任务
+
+你不是在复述各部门的结论，而是在做**跨部门交叉分析**：
+1. 扫描各部门的 summary 和 key_points
+2. 找出**交叉洞察**——两个以上部门的结论共同指向的信号或矛盾
+3. 给出按优先级排列的**战略建议**（至少 3 条）
+4. 标记**高风险项**（数据不足 / 部门间结论矛盾 / 可信度低 / 关键维度缺失）
+5. 给出项目综合**可行性评分**（0-100）
+
+## 输出格式
+
+你必须返回以下 JSON 结构：
+
+{
+  "executive_summary": "≤ 300 字执行摘要，给 CEO 的一句话总结",
+  "overall_score": 65.0,
+  "cross_insights": [
+    {
+      "title": "市场规模 × 竞品空白 → 切入机会",
+      "insight": "市场调研显示需求旺盛（3000亿），但竞品分析指出没有成功产品——这意味着窗口期存在，但需要回答「为什么别人没做成」",
+      "involved_dimensions": ["market_research", "competitor_analysis"],
+      "confidence": 0.75
+    }
+  ],
+  "recommendations": [
+    {
+      "priority": 1,
+      "title": "先回答「为什么别人没做成」",
+      "rationale": "竞品分析发现多个失败案例（波奇、宠明），在投入开发前必须深度复盘失败原因",
+      "related_dimensions": ["competitor_analysis", "product_design"]
+    }
+  ],
+  "risks": [
+    {
+      "severity": "high",
+      "title": "竞品数据可信度偏低",
+      "description": "竞品分析整体可信度仅 0.55，多处发现来自个人博客而非行业报告，建议补充权威来源",
+      "related_dimension": "competitor_analysis"
+    }
+  ],
+  "dimension_confidence": {
+    "market_research": 0.80,
+    "competitor_analysis": 0.55,
+    "product_design": 0.60,
+    "future_direction": 0.40,
+    "change_plan": 0.50
+  }
+}
+
+## 核心原则
+
+1. **CrossInsight 必须有至少两个维度支撑**——单部门结论不值得做交叉洞察
+2. **建议必须有数据引用**——每条 recommendation 的 rationale 要说清基于哪个部门的哪条结论
+3. **禁止复述原文**——executive_summary 不是把各部门 summary 拼接，而是提炼后的新结论
+4. **数据不足就标风险**——某个部门可信度 < 0.5，或关键维度无数据，必须放进 risks
+5. **overall_score 综合考虑**：市场机会 × 竞品格局 × 产品可行性 × 未来趋势 × 执行难度
+6. **建议要可执行**——不是「建议做好产品」，而是「建议优先做 X，因为 Y 部门的数据显示 Z」
+"""
+
+
+def build_ceo_summary_prompt(
+    project_description: str,
+    departments: dict[str, dict | None],
+) -> list[dict[str, str]]:
+    """构建 CEO 汇总分析的 messages。
+
+    遍历所有中层部门，有数据的格式化为上下文，无数据的标注缺失。
+
+    参数：
+        project_description：用户原始项目描述
+        departments：{部门名: 部门State 或 None} 的字典
+
+    返回：
+        可直接传给 llm.chat_structured() 的 messages 列表
+    """
+    # 构建各部门上下文文本
+    parts: list[str] = []
+    parts.append(f"## 项目背景\n{project_description}\n")
+
+    for dept_name, dept_state in departments.items():
+        if dept_state is None:
+            parts.append(f"\n### [{dept_name}]\n⚠️ 该部门无数据\n")
+            continue
+
+        summary = getattr(dept_state, "summary", None) or "无"
+        confidence = getattr(dept_state, "overall_confidence", 0.0)
+        key_points = getattr(dept_state, "key_points", [])
+        status = getattr(dept_state, "status", None)
+        status_str = status.value if hasattr(status, "value") else str(status)
+
+        parts.append(f"\n### [{dept_name}]")
+        parts.append(f"可信度: {confidence:.0%} | 状态: {status_str}")
+        parts.append(f"摘要: {summary}")
+        parts.append(f"分析要点 ({len(key_points)} 条):")
+
+        for i, kp in enumerate(key_points, 1):
+            title = getattr(kp, "title", "")
+            content = getattr(kp, "content", "")
+            conf = getattr(kp, "confidence_level", "")
+            sources = getattr(kp, "source_count", 0)
+            parts.append(f"  {i}. [{conf}] {title}")
+            parts.append(f"     {content}")
+            parts.append(f"     来源数: {sources}")
+
+    parts.append("\n---")
+    parts.append("请基于以上各部门数据，产出跨部门交叉分析报告。")
+
+    context_text = "\n".join(parts)
+
+    return [
+        {"role": "system", "content": CEO_SUMMARY_SYSTEM_PROMPT},
+        {"role": "user", "content": context_text},
+    ]
+
+
+# =============================================================================
 # 工具函数：格式化搜索结果给底层 Agent
 # =============================================================================
 

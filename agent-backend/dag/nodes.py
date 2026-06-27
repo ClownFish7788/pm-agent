@@ -26,9 +26,10 @@ from agents.middle.product import ProductLeader
 from agents.middle.future import FutureLeader
 from agents.middle.change import ChangeLeader
 from llm.base import BaseLLMProvider
-from prompts.templates import build_top_agent_prompt
+from prompts.templates import build_top_agent_prompt, build_ceo_summary_prompt
 from schemas import (
     ExecutionPlan,
+    FinalReport,
     GlobalState,
     MarketResearchState,
     Message,
@@ -345,145 +346,143 @@ async def node_change_plan(
 # 节点 3：汇总报告
 # =============================================================================
 
-async def node_aggregate(state: GlobalState) -> dict:
-    """DAG 节点 3 —— 汇总所有中层结果，打印最终分析看板。
+async def node_aggregate(
+    state: GlobalState,
+    llm: BaseLLMProvider,
+) -> dict:
+    """DAG 节点 3 —— CEO 智能汇总：跨部门交叉分析。
 
     职责：
-    1. 读取各中层 State 的 Public 字段
-    2. 打印结构化看板
-    3. 收集统计信息
-
-    MVP：只有 market_research 一个中层有数据，其余为 None。
+    1. 收集所有中层 State 的 Public 字段
+    2. 调 LLM 做跨部门交叉分析 → FinalReport
+    3. 格式化打印 CEO 综合报告
 
     参数：
-        state：当前 GlobalState（只读）
+        state：当前 GlobalState（含所有中层结果）
+        llm：LLM Provider（注入用）
 
     返回：
-        dict 包含 current_phase 和 errors 的更新
+        dict 包含 current_phase、errors、total_api_calls 的更新
     """
-    log_phase("DAG 节点 3/3: 汇总报告 — 分析看板")
-
-    print(f"\n  {'─' * 56}")
-    print(f"  📋 PM Agent 最终分析报告")
-    print(f"  {'─' * 56}")
+    log_phase("DAG 节点 3/3: CEO 汇总 — 跨部门交叉分析")
 
     errors: list[str] = list(state.errors)
 
-    # ---- 市场调研看板 ----
-    market = state.market_research
-    if market is not None:
-        print(f"\n  【市场调研】")
-        print(f"  整体可信度: {market.overall_confidence:.0%}")
-        print(f"  状态: {market.status.value}")
-        if market.summary:
-            print(f"  摘要: {market.summary}")
-        print(f"\n  分析要点 ({len(market.key_points)} 条):")
+    # ---- 构建部门数据字典 ----
+    departments: dict[str, object | None] = {
+        "market_research": state.market_research,
+        "competitor_analysis": state.competitor_analysis,
+        "product_design": state.product_design,
+        "future_direction": state.future_direction,
+        "change_plan": state.change_plan,
+    }
 
-        for i, point in enumerate(market.key_points, 1):
-            confidence_label = _confidence_emoji(point.confidence_level)
-            print(f"\n    {i}. [{confidence_label}] {point.title}")
-            print(f"       {point.content}")
-            print(f"       📎 来源数: {point.source_count}")
-    else:
-        print(f"\n  【市场调研】⚠️ 无数据")
-        errors.append("市场调研未产生结果")
+    # ---- 调 LLM 做交叉分析 ----
+    messages = build_ceo_summary_prompt(
+        project_description=state.project.description,
+        departments=departments,
+    )
 
-    # ---- 竞品分析看板 ----
-    competitor = state.competitor_analysis
-    if competitor is not None:
-        print(f"\n  【竞品分析】")
-        print(f"  整体可信度: {competitor.overall_confidence:.0%}")
-        print(f"  状态: {competitor.status.value}")
-        if competitor.summary:
-            print(f"  摘要: {competitor.summary}")
-        print(f"\n  分析要点 ({len(competitor.key_points)} 条):")
+    try:
+        report: FinalReport = await llm.chat_structured(
+            messages=messages,
+            output_schema=FinalReport,
+            max_tokens=4096,
+        )
+    except Exception as e:
+        log_error("node_aggregate", f"CEO 汇总分析失败: {type(e).__name__}: {e}")
+        errors.append(f"CEO 汇总分析失败: {e}")
+        return {
+            "current_phase": "completed",
+            "errors": errors,
+            "total_api_calls": llm.call_count,
+        }
 
-        for i, point in enumerate(competitor.key_points, 1):
-            confidence_label = _confidence_emoji(point.confidence_level)
-            print(f"\n    {i}. [{confidence_label}] {point.title}")
-            print(f"       {point.content}")
-            print(f"       📎 来源数: {point.source_count}")
-    else:
-        print(f"\n  【竞品分析】⚠️ 无数据")
-        errors.append("竞品分析未产生结果")
-
-    # ---- 产品设计看板 ----
-    product = state.product_design
-    if product is not None:
-        print(f"\n  【产品设计】")
-        print(f"  整体可信度: {product.overall_confidence:.0%}")
-        print(f"  状态: {product.status.value}")
-        if product.summary:
-            print(f"  摘要: {product.summary}")
-        print(f"\n  分析要点 ({len(product.key_points)} 条):")
-
-        for i, point in enumerate(product.key_points, 1):
-            confidence_label = _confidence_emoji(point.confidence_level)
-            print(f"\n    {i}. [{confidence_label}] {point.title}")
-            print(f"       {point.content}")
-            print(f"       📎 来源数: {point.source_count}")
-    else:
-        print(f"\n  【产品设计】⚠️ 无数据")
-        errors.append("产品设计未产生结果")
-
-    # ---- 未来方向看板 ----
-    future = state.future_direction
-    if future is not None:
-        print(f"\n  【未来方向】")
-        print(f"  整体可信度: {future.overall_confidence:.0%}")
-        print(f"  状态: {future.status.value}")
-        if future.summary:
-            print(f"  摘要: {future.summary}")
-        print(f"\n  分析要点 ({len(future.key_points)} 条):")
-
-        for i, point in enumerate(future.key_points, 1):
-            confidence_label = _confidence_emoji(point.confidence_level)
-            print(f"\n    {i}. [{confidence_label}] {point.title}")
-            print(f"       {point.content}")
-            print(f"       📎 来源数: {point.source_count}")
-    else:
-        print(f"\n  【未来方向】⚠️ 无数据")
-        errors.append("未来方向未产生结果")
-
-    # ---- 当下改变看板 ----
-    change = state.change_plan
-    if change is not None:
-        print(f"\n  【当下改变】")
-        print(f"  整体可信度: {change.overall_confidence:.0%}")
-        print(f"  状态: {change.status.value}")
-        if change.summary:
-            print(f"  摘要: {change.summary}")
-        print(f"\n  分析要点 ({len(change.key_points)} 条):")
-
-        for i, point in enumerate(change.key_points, 1):
-            confidence_label = _confidence_emoji(point.confidence_level)
-            print(f"\n    {i}. [{confidence_label}] {point.title}")
-            print(f"       {point.content}")
-            print(f"       📎 来源数: {point.source_count}")
-    else:
-        print(f"\n  【当下改变】⚠️ 无数据")
-        errors.append("当下改变未产生结果")
-
-    # ---- 其余中层（MVP 全部实现） ----
-    for name in []:
-        val = getattr(state, name, None)
-        if val is not None:
-            print(f"\n  【{name}】(预留)")
-
-    # ---- 全局统计 ----
-    print(f"\n  {'─' * 56}")
-    print(f"  📊 统计")
-    print(f"  LLM API 调用次数: {state.total_api_calls} / {state.max_api_calls}")
-    if state.total_api_calls >= state.max_api_calls:
-        print(f"  🔴 已达到 API 调用上限！")
-    print(f"  非致命错误: {len(errors)} 条")
-    for err in errors:
-        print(f"    ⚠️  {err}")
-
-    print(f"\n  ✅ 分析完成")
-    print(f"  {'─' * 56}\n")
+    # ---- 打印 FinalReport ----
+    _print_ceo_report(report, state)
 
     return {
         "current_phase": "completed",
         "errors": errors,
+        "total_api_calls": llm.call_count,
     }
+
+
+# =============================================================================
+# FinalReport 打印辅助函数
+# =============================================================================
+
+def _print_ceo_report(report: FinalReport, state: GlobalState) -> None:
+    """格式化打印 CEO 交叉分析报告。
+
+    参数：
+        report：LLM 产出的 FinalReport
+        state：全局状态（用于统计）
+    """
+    print(f"\n  {'=' * 56}")
+    print(f"  📋 CEO 综合分析报告")
+    print(f"  {'=' * 56}")
+
+    # 执行摘要
+    print(f"\n  ┌─ 📝 执行摘要 ─────────────────────────────")
+    print(f"  │ {report.executive_summary[:300]}")
+    print(f"  └──────────────────────────────────────────")
+
+    # 综合评分
+    score = report.overall_score
+    score_bar = "█" * int(score / 10) + "░" * (10 - int(score / 10))
+    score_emoji = "🟢" if score >= 70 else ("🟡" if score >= 40 else "🔴")
+    print(f"\n  ┌─ 📊 综合可行性评分 ──────────────────────")
+    print(f"  │ {score_emoji} {score:.0f}/100  [{score_bar}]")
+    print(f"  └──────────────────────────────────────────")
+
+    # 跨部门交叉洞察
+    print(f"\n  ┌─ 🔗 跨部门交叉洞察 ({len(report.cross_insights)} 条) ───")
+    for i, ci in enumerate(report.cross_insights, 1):
+        dims = ", ".join(ci.involved_dimensions) if ci.involved_dimensions else "无"
+        print(f"  │")
+        print(f"  │ {i}. {ci.title}")
+        print(f"  │    {ci.insight[:200]}")
+        print(f"  │    🏷️ 涉及: {dims} | 置信度: {ci.confidence:.0%}")
+    if not report.cross_insights:
+        print(f"  │ (无交叉洞察)")
+    print(f"  └──────────────────────────────────────────")
+
+    # 战略建议
+    print(f"\n  ┌─ 💡 战略建议 ({len(report.recommendations)} 条) ──────")
+    for i, rec in enumerate(report.recommendations, 1):
+        dims = ", ".join(rec.related_dimensions) if rec.related_dimensions else "无"
+        print(f"  │")
+        print(f"  │ P{rec.priority} [{i}] {rec.title}")
+        print(f"  │     {rec.rationale[:200]}")
+        print(f"  │     🏷️ 依据: {dims}")
+    print(f"  └──────────────────────────────────────────")
+
+    # 风险
+    print(f"\n  ┌─ ⚠️ 风险与不确定性 ({len(report.risks)} 条) ──────")
+    for i, risk in enumerate(report.risks, 1):
+        sev_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(risk.severity, "⚪")
+        print(f"  │")
+        print(f"  │ {sev_emoji} [{risk.severity}] {risk.title}")
+        print(f"  │    {risk.description[:150]}")
+        print(f"  │    🏷️ 来源: {risk.related_dimension}")
+    if not report.risks:
+        print(f"  │ (无显著风险)")
+    print(f"  └──────────────────────────────────────────")
+
+    # 各部门信心
+    print(f"\n  ┌─ 📊 各部门可信度 ─────────────────────────")
+    for dim, conf in report.dimension_confidence.items():
+        bar = "█" * int(conf * 10) + "░" * (10 - int(conf * 10))
+        print(f"  │ {dim:25s} {conf:.0%} [{bar}]")
+    print(f"  └──────────────────────────────────────────")
+
+    # 全局统计
+    print(f"\n  {'─' * 56}")
+    print(f"  📊 LLM API 调用: {state.total_api_calls} / {state.max_api_calls}")
+    print(f"  📊 非致命错误: {len(state.errors)} 条")
+    for err in state.errors:
+        print(f"    ⚠️  {err}")
+
+    print(f"\n  ✅ 分析完成")
+    print(f"  {'─' * 56}\n")

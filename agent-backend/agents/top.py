@@ -30,9 +30,10 @@ from agents.middle.product import ProductLeader
 from agents.middle.future import FutureLeader
 from agents.middle.change import ChangeLeader
 from llm.base import BaseLLMProvider
-from prompts.templates import build_top_agent_prompt
+from prompts.templates import build_top_agent_prompt, build_ceo_summary_prompt
 from schemas import (
     ExecutionPlan,
+    FinalReport,
     GlobalState,
     MarketResearchState,
     Message,
@@ -275,53 +276,122 @@ class TopAgent:
         log_budget(state.total_api_calls, state.max_api_calls)
 
     async def _phase_summarize(self, state: GlobalState) -> None:
-        """阶段 3：汇总报告。
+        """阶段 3：CEO 智能汇总。
 
-        将各中层的结果汇总，打印最终分析看板。
-        MVP：只有 market_research 一个中层，所以汇总 = 打印市场调研结论。
+        调 LLM 对全部中层结果做跨部门交叉分析，产出 FinalReport。
+        不再简单打印各部门数据——而是提炼交叉洞察、战略建议和风险。
 
         参数：
-            state：全局状态（只读）
+            state：全局状态（含所有中层结果）
         """
-        log_phase("汇总报告 — 分析看板")
+        log_phase("CEO 汇总分析 — 跨部门交叉分析")
 
-        print(f"\n  {'─' * 56}")
-        print(f"  📋 最终分析报告")
-        print(f"  {'─' * 56}")
+        # ---- 构建部门数据字典 ----
+        departments: dict[str, object | None] = {
+            "market_research": state.market_research,
+            "competitor_analysis": state.competitor_analysis,
+            "product_design": state.product_design,
+            "future_direction": state.future_direction,
+            "change_plan": state.change_plan,
+        }
 
-        # ---- 市场调研看板 ----
-        market = state.market_research
+        # ---- 调 LLM 做交叉分析 ----
+        messages = build_ceo_summary_prompt(
+            project_description=state.project.description,
+            departments=departments,
+        )
 
-        if market is not None:
-            print(f"\n  【市场调研】")
-            print(f"  可信度: {market.overall_confidence:.0%}")
-            print(f"  状态: {market.status.value}")
-            if market.summary:
-                print(f"  摘要: {market.summary}")
-            print(f"\n  分析要点 ({len(market.key_points)} 条):")
+        try:
+            report: FinalReport = await self.llm.chat_structured(
+                messages=messages,
+                output_schema=FinalReport,
+                max_tokens=4096,
+            )
+        except Exception as e:
+            log_error("TopAgent(CEO)", f"汇总分析失败: {type(e).__name__}: {e}")
+            # 失败时打印简单统计
+            print(f"\n  ❌ CEO 汇总分析失败: {e}")
+            print(f"  LLM API 调用: {self.llm.call_count} / {state.max_api_calls}")
+            return
 
-            for i, point in enumerate(market.key_points, 1):
-                print(f"    {i}. [{point.confidence_level}] {point.title}")
-                print(f"       {point.content[:120]}...")
-                print(f"       来源数: {point.source_count}")
-                print()
+        state.total_api_calls = self.llm.call_count
 
-        # ---- 其余中层看板（MVP 为 None，跳过） ----
-        if state.competitor_analysis is not None:
-            print(f"\n  【竞品分析】(预留)")
-        if state.product_design is not None:
-            print(f"\n  【产品设计】(预留)")
-        if state.future_direction is not None:
-            print(f"\n  【未来方向】(预留)")
-        if state.change_plan is not None:
-            print(f"\n  【当下改变】(预留)")
+        # ---- 打印 FinalReport 看板 ----
+        self._print_final_report(report, state)
+
+    # ------------------------------------------------------------------
+    # 打印 FinalReport
+    # ------------------------------------------------------------------
+
+    def _print_final_report(self, report: FinalReport, state: GlobalState) -> None:
+        """格式化打印 FinalReport。
+
+        参数：
+            report：LLM 产出的 FinalReport
+            state：全局状态（用于统计）
+        """
+        print(f"\n  {'=' * 56}")
+        print(f"  📋 CEO 综合分析报告")
+        print(f"  {'=' * 56}")
+
+        # ---- 执行摘要 ----
+        print(f"\n  ┌─ 📝 执行摘要 ─────────────────────────────")
+        print(f"  │ {report.executive_summary[:300]}")
+        print(f"  └──────────────────────────────────────────")
+
+        # ---- 综合评分 ----
+        score = report.overall_score
+        score_bar = "█" * int(score / 10) + "░" * (10 - int(score / 10))
+        score_emoji = "🟢" if score >= 70 else ("🟡" if score >= 40 else "🔴")
+        print(f"\n  ┌─ 📊 综合可行性评分 ──────────────────────")
+        print(f"  │ {score_emoji} {score:.0f}/100  [{score_bar}]")
+        print(f"  └──────────────────────────────────────────")
+
+        # ---- 跨部门交叉洞察 ----
+        print(f"\n  ┌─ 🔗 跨部门交叉洞察 ({len(report.cross_insights)} 条) ───")
+        for i, ci in enumerate(report.cross_insights, 1):
+            dims = ", ".join(ci.involved_dimensions) if ci.involved_dimensions else "无"
+            print(f"  │")
+            print(f"  │ {i}. {ci.title}")
+            print(f"  │    {ci.insight[:200]}")
+            print(f"  │    🏷️ 涉及部门: {dims} | 置信度: {ci.confidence:.0%}")
+        if not report.cross_insights:
+            print(f"  │ (无交叉洞察)")
+        print(f"  └──────────────────────────────────────────")
+
+        # ---- 战略建议 ----
+        print(f"\n  ┌─ 💡 战略建议 ({len(report.recommendations)} 条) ──────")
+        for i, rec in enumerate(report.recommendations, 1):
+            dims = ", ".join(rec.related_dimensions) if rec.related_dimensions else "无"
+            print(f"  │")
+            print(f"  │ P{rec.priority} [{i}] {rec.title}")
+            print(f"  │     {rec.rationale[:200]}")
+            print(f"  │     🏷️ 依据: {dims}")
+        print(f"  └──────────────────────────────────────────")
+
+        # ---- 风险 ----
+        print(f"\n  ┌─ ⚠️ 风险与不确定性 ({len(report.risks)} 条) ──────")
+        for i, risk in enumerate(report.risks, 1):
+            sev_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(risk.severity, "⚪")
+            print(f"  │")
+            print(f"  │ {sev_emoji} [{risk.severity}] {risk.title}")
+            print(f"  │    {risk.description[:150]}")
+            print(f"  │    🏷️ 来源: {risk.related_dimension}")
+        if not report.risks:
+            print(f"  │ (无显著风险)")
+        print(f"  └──────────────────────────────────────────")
+
+        # ---- 各部门信心 ----
+        print(f"\n  ┌─ 📊 各部门可信度 ─────────────────────────")
+        for dim, conf in report.dimension_confidence.items():
+            bar = "█" * int(conf * 10) + "░" * (10 - int(conf * 10))
+            print(f"  │ {dim:25s} {conf:.0%} [{bar}]")
+        print(f"  └──────────────────────────────────────────")
 
         # ---- 全局统计 ----
-        print(f"  {'─' * 56}")
-        print(f"  📊 统计")
-        print(f"  LLM API 调用次数: {state.total_api_calls} / {state.max_api_calls}")
-        print(f"  非致命错误: {len(state.errors)} 条")
-
+        print(f"\n  {'─' * 56}")
+        print(f"  📊 LLM API 调用: {state.total_api_calls} / {state.max_api_calls}")
+        print(f"  📊 非致命错误: {len(state.errors)} 条")
         if state.errors:
             for err in state.errors:
                 print(f"    ⚠️  {err}")

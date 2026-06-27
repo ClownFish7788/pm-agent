@@ -122,12 +122,11 @@ def build_graph(
     async def _node_change(state: GlobalState) -> dict:
         return await node_change_plan(state, llm, search_provider)
 
-    # node_aggregate 不需要 Provider（只读 state + print），直接用
-    # 但签名要保持一致：async def fn(state) -> dict
+    # node_aggregate 需要 llm 做 CEO 交叉分析
 
     async def _node_aggregate(state: GlobalState) -> dict:
-        """闭包包装：aggregate 节点不需要 Provider"""
-        return await node_aggregate(state)
+        """闭包包装：注入 llm（做 CEO 交叉分析）"""
+        return await node_aggregate(state, llm)
 
     # ---- 注册节点 ----
     builder.add_node(NODE_PLAN, _node_plan)

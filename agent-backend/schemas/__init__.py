@@ -472,6 +472,86 @@ class GlobalState(BaseModel):
 
 
 # =============================================================================
+# CEO 汇总报告类型（Top Agent 交叉分析产出）
+# =============================================================================
+
+
+class CrossInsight(BaseModel):
+    """跨部门交叉洞察 —— 两个以上中层结论的交叉点。
+
+    不是单部门结论的复述，而是「市场说 X + 竞品说 Y → 所以 Z」。
+    """
+
+    title: str = Field(..., description="洞察标题（≤ 30 字）")
+    insight: str = Field(..., description="交叉分析内容（≤ 200 字）")
+    involved_dimensions: list[str] = Field(
+        default_factory=list,
+        description="涉及的中层部门，如 ['market_research', 'competitor_analysis']",
+    )
+    confidence: float = Field(default=0.5, description="交叉验证后的综合置信度 0-1")
+
+
+class Recommendation(BaseModel):
+    """战略建议 —— 基于数据的产品/业务行动建议。"""
+
+    priority: int = Field(default=1, description="优先级，1=最高")
+    title: str = Field(..., description="建议标题（≤ 30 字）")
+    rationale: str = Field(..., description="建议理由（≤ 200 字），基于哪些数据")
+    related_dimensions: list[str] = Field(
+        default_factory=list,
+        description="支撑此建议的中层部门",
+    )
+
+
+class RiskFlag(BaseModel):
+    """风险标记 —— 数据不足、部门矛盾、可信度低等问题。"""
+
+    severity: Literal["high", "medium", "low"] = Field(
+        default="medium", description="严重程度"
+    )
+    title: str = Field(..., description="风险标题（≤ 30 字）")
+    description: str = Field(..., description="风险描述（≤ 150 字）")
+    related_dimension: str = Field(
+        default="", description="来源部门，如 'market_research'"
+    )
+
+
+class FinalReport(BaseModel):
+    """Top Agent（CEO）综合各中层结果后产出的最终报告。
+
+    这不是中层数据的简单罗列，而是跨部门交叉分析后的战略级输出。
+    """
+
+    executive_summary: str = Field(
+        default="", description="≤ 300 字执行摘要，CEO 一句话说清结论"
+    )
+    overall_score: float = Field(
+        default=50.0, description="项目综合可行性评分 0-100"
+    )
+
+    # 跨部门交叉洞察
+    cross_insights: list[CrossInsight] = Field(
+        default_factory=list, description="跨部门交叉洞察（≤ 5 条）"
+    )
+
+    # 战略建议
+    recommendations: list[Recommendation] = Field(
+        default_factory=list, description="按优先级排列的战略建议（≤ 5 条）"
+    )
+
+    # 风险
+    risks: list[RiskFlag] = Field(
+        default_factory=list, description="风险与不确定性（≤ 5 条）"
+    )
+
+    # 各维度信心
+    dimension_confidence: dict[str, float] = Field(
+        default_factory=dict,
+        description="各中层部门的整体可信度汇总",
+    )
+
+
+# =============================================================================
 # 搜索相关的数据类型
 # =============================================================================
 
