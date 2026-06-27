@@ -110,12 +110,13 @@ async def node_top_planning(
         log_skip(f"计划跳过: {skipped_type.value}", reason)
 
     # ---- 返回状态更新 ----
-    new_calls = state.total_api_calls + 1
-    log_budget(new_calls, state.max_api_calls)
+    # call_count 由 LLM Provider 内部自动计数（chat/chat_structured 每次调用 +1）
+    # 因为整个调用链共享同一个 llm 实例，直接读 llm.call_count 就是精确值
+    log_budget(llm.call_count, state.max_api_calls)
 
     return {
         "execution_plan": plan,
-        "total_api_calls": new_calls,
+        "total_api_calls": llm.call_count,
         "current_phase": "planning_done",
     }
 
@@ -166,16 +167,12 @@ async def node_market_research(
     )
 
     # ---- 统计 API 调用 ----
-    # 中层 Leader 调用 LLM 1 次
-    # 每个底层 Agent 调用 LLM 1 次（搜索 + 提取）
-    bottom_count = len(market_state.sub_agents)
-    new_calls = state.total_api_calls + 1 + bottom_count
-
-    log_budget(new_calls, state.max_api_calls)
+    # 不估算，直接读 llm.call_count——中层和底层每次 chat/chat_structured 都自动 +1
+    log_budget(llm.call_count, state.max_api_calls)
 
     return {
         "market_research": market_state,
-        "total_api_calls": new_calls,
+        "total_api_calls": llm.call_count,
         "current_phase": "market_done",
     }
 

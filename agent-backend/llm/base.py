@@ -26,7 +26,15 @@ class BaseLLMProvider(ABC):
     每个具体 Provider（如 DeepSeekProvider）必须实现以下方法：
     - chat()：自由文本对话
     - chat_structured()：返回结构化 JSON（由 Pydantic 校验）
+
+    内置 call_count 计数器：因为整个调用链共享同一个 LLM 实例，
+    子类在 chat()/chat_structured() 中 +1，顶层直接读 llm.call_count
+    就是精确的总调用次数，不需要上层"猜"底层做了几次调用。
     """
+
+    def __init__(self) -> None:
+        """初始化 Provider，设置调用计数器为 0。"""
+        self.call_count: int = 0
 
     # ------------------------------------------------------------------
     # 子类必须填写的元信息

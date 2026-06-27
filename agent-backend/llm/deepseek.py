@@ -61,6 +61,8 @@ class DeepSeekProvider(BaseLLMProvider):
             base_url：API 地址。默认从 DEEPSEEK_BASE_URL 读取，最终回退到 https://api.deepseek.com
             model：模型名。默认从 DEEPSEEK_MODEL 读取，最终回退到 deepseek-chat
         """
+        super().__init__()  # 初始化 call_count 等基类属性
+
         # ---- 读取配置（优先级：参数 > 环境变量 > 默认值） ----
         self._api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self._base_url = base_url or os.getenv(
@@ -109,6 +111,8 @@ class DeepSeekProvider(BaseLLMProvider):
         3. 提取 response.choices[0].message.content
         4. 返回纯文本
         """
+        self.call_count += 1  # 每次 LLM 调用自动计数
+
         try:
             response = await self._client.chat.completions.create(
                 model=self.model,
@@ -164,7 +168,7 @@ class DeepSeekProvider(BaseLLMProvider):
             ),
         })
 
-        # ---- 步骤 2：调用 chat ----
+        # ---- 步骤 2：调用 chat（chat() 内部会 self.call_count += 1） ----
         try:
             raw_text = await self.chat(
                 enforced_messages,

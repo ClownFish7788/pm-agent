@@ -135,7 +135,7 @@ class TopAgent:
                 output_schema=ExecutionPlan,
             )
             state.execution_plan = plan
-            state.total_api_calls += 1  # 统计 LLM 调用次数
+            state.total_api_calls = self.llm.call_count  # LLM Provider 内部自动计数
         except Exception as e:
             log_error("TopAgent", f"生成执行计划失败: {type(e).__name__}: {e}")
             # 失败时使用默认计划（只跑市场调研）
@@ -209,10 +209,8 @@ class TopAgent:
                 # 填入全局 State
                 state.market_research = market_state
 
-                # 统计 LLM 调用次数（中层 Leader 1 次 + 每个底层 Agent 1 次）
-                # 底层 Agent 每执行一次 search + LLM 提取 = 1 次 LLM 调用
-                bottom_count = len(market_state.sub_agents)
-                state.total_api_calls += 1 + bottom_count  # 中层 1 次 + 底层 N 次
+                # LLM 调用次数由 Provider 内部自动计数，直接读即可
+                state.total_api_calls = self.llm.call_count
 
             else:
                 # 其他中层类型（MVP 阶段不会走到这里）
