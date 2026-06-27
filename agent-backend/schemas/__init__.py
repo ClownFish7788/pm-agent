@@ -244,14 +244,13 @@ class BottomReport(BaseModel):
 
 
 # =============================================================================
-# 驳回机制的数据结构（M——预留，不实现）
+# 驳回 + 打分机制
 # =============================================================================
 
 
 class ItemScore(BaseModel):
     """单条发现的打分结果。
 
-    【MVP 预留】—— Phase 1 不调用打分逻辑，所有条目默认「通过」。
     Phase 2 启用后，中层 Leader 对每条 Finding 进行四维打分，
     综合分 < 5 或可信度 < 4 触发驳回。
 
@@ -280,7 +279,6 @@ class ItemScore(BaseModel):
 class RejectionEntry(BaseModel):
     """一次驳回记录。
 
-    【MVP 预留】—— Phase 1 不产生驳回。
     只记录驳回原因和重做指令，不保存被驳回的完整输出（旧数据会干扰下一轮判断）。
     40 字节左右的简短记录即可提供足够的审计信息。
     """
@@ -288,6 +286,40 @@ class RejectionEntry(BaseModel):
     reason: str = Field(description="驳回原因，如「可信度 3.2 < 4，来源为个人博客」")
     instruction: str = Field(description="给底层的改进指令，如「更换搜索词，优先找行业报告」")
     timestamp: str = Field(description="ISO 时间戳")
+
+
+class SubAgentReview(BaseModel):
+    """中层 Reviewer 对单个底层报告的审核结果。
+
+    中层 Leader 在收集底层报告后，调 LLM 以 reviewer 角色审核每份报告的质量。
+    低分触发驳回 → 用 improved_query 重新搜索（最多 3 轮）。
+    """
+    sub_id: str = Field(description="被审核的子 Agent ID")
+    overall_score: float = Field(default=0.0, ge=0, le=10, description="综合分 0-10（四维平均）")
+    completeness: float = Field(default=0.0, ge=0, le=10, description="完整度 0-10")
+    credibility: float = Field(default=0.0, ge=0, le=10, description="可信度 0-10")
+    freshness: float = Field(default=0.0, ge=0, le=10, description="时效性 0-10")
+    relevance: float = Field(default=0.0, ge=0, le=10, description="相关度 0-10")
+    verdict: Literal["passed", "rejected"] = Field(
+        default="passed",
+        description="审核结论：passed=通过 | rejected=驳回（overall<5 或 credibility<4）"
+    )
+    reason: str = Field(
+        default="",
+        description="驳回原因（≤ 100 字），如「来源均为个人博客，无权威数据」"
+    )
+    improved_query: str = Field(
+        default="",
+        description="改进后的搜索关键词（被驳回时必填），解决当前报告的短板"
+    )
+
+
+class ReviewResult(BaseModel):
+    """一次审核的批量结果——LLM 审核所有待审子 Agent 后一次性输出。"""
+    reviews: list[SubAgentReview] = Field(
+        default_factory=list,
+        description="每个待审子 Agent 一条审核结果"
+    )
 
 
 # =============================================================================

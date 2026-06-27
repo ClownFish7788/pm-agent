@@ -810,6 +810,113 @@ def build_ceo_summary_prompt(
 
 
 # =============================================================================
+# 中层 Reviewer Prompt（驳回 + 打分）
+# =============================================================================
+
+MIDDLE_REVIEWER_SYSTEM_PROMPT = """\
+你是一位严格的质量审核员。你的任务是审核来自底层搜索 Agent 的研究报告，
+判断其质量是否达到中层分析的要求。
+
+## 打分维度（每项 0-10，保留 1 位小数）
+
+1. **completeness**（完整度）：报告是否充分覆盖了搜索方向的核心问题？关键数据是否缺失？
+2. **credibility**（可信度）：来源是否权威？.gov / 头部媒体 / 知名研究机构 > 一般媒体 > 个人博客/论坛
+3. **freshness**（时效性）：数据是否过时？是否引用了近 1-2 年的数据？（如果报告未提时间，酌情扣分）
+4. **relevance**（相关度）：报告内容与搜索方向的匹配程度？有没有跑题？
+
+## 驳回规则
+
+- **overall_score < 5**（四维平均）→ 驳回
+- **或 credibility < 4** → 驳回（来源不可信，内容再好也没用）
+
+## 驳回时必须提供
+
+- **reason**：具体哪里不达标（≤ 100 字），如：
+  - 「来源均为个人博客和论坛帖子，无权威行业数据支撑」
+  - 「报告内容过于空泛，缺少具体数字和统计」
+  - 「搜索结果与搜索方向相关性低，大量无关内容」
+- **improved_query**：改进后的搜索关键词，解决当前报告的短板，如：
+  - 原 query 太宽泛 → 加限定词（"行业报告"、"2025数据"、"官方统计"）
+  - 来源权威度低 → 加 "site:gov.cn" 或 "研究报告"
+  - 时效性差 → 加 "2025"、"最新"
+  - 相关性低 → 调整关键词使其更精准
+
+## 输出格式
+
+你必须返回以下 JSON 结构，每个待审报告一条 review：
+
+{
+  "reviews": [
+    {
+      "sub_id": "market_query_1",
+      "overall_score": 6.5,
+      "completeness": 7.0,
+      "credibility": 6.0,
+      "freshness": 7.0,
+      "relevance": 6.0,
+      "verdict": "passed",
+      "reason": "",
+      "improved_query": ""
+    }
+  ]
+}
+
+## 评分参考
+
+| 分数 | 含义 |
+|------|------|
+| 8-10 | 优秀：多源印证，权威来源，数据新鲜，高度相关 |
+| 6-7  | 合格：有数据支撑，来源尚可，基本覆盖搜索方向 |
+| 4-5  | 勉强：数据单薄，来源一般，部分相关 |
+| 1-3  | 不合格：数据缺失严重，来源不可信，或与搜索方向关系不大 |
+
+## 核心原则
+
+1. **宁可严格不要宽松**：低质量数据进入中层分析会污染整个报告
+2. **具体优于抽象**：reason 和 improved_query 必须给出可操作的改进方向
+3. **overall_score 是四维平均**：不是感觉分，是 (completeness+credibility+freshness+relevance)/4
+4. **credibility < 4 必驳**：即使其他维度满分，来源不可信也要驳回
+"""
+
+
+def build_review_prompt(
+    sub_slots_info: list[dict],
+    project_summary: str,
+) -> list[dict[str, str]]:
+    """构建中层 Reviewer 的审核 messages。
+
+    参数：
+        sub_slots_info：待审核的子 Agent 信息列表，每个 dict 包含：
+            sub_id, search_query, report, findings_count, key_findings_summary
+        project_summary：项目描述，给 reviewer 做上下文
+
+    返回：
+        可直接传给 llm.chat_structured() 的 messages 列表
+    """
+    parts: list[str] = []
+    parts.append(f"## 项目背景\n{project_summary}\n")
+    parts.append(f"## 待审核的研究报告（共 {len(sub_slots_info)} 份）\n")
+
+    for info in sub_slots_info:
+        parts.append(f"### {info['sub_id']}")
+        parts.append(f"搜索方向: {info['search_query']}")
+        parts.append(f"研究报告 ({info['findings_count']} 条发现):")
+        parts.append(info.get('report', '(无报告)'))
+        parts.append(f"关键发现摘要:")
+        for f_summary in info.get('key_findings_summary', []):
+            parts.append(f"  • {f_summary}")
+        parts.append("")
+
+    parts.append("---")
+    parts.append("请审核以上研究报告，对每份给出评分和 verdict。")
+
+    return [
+        {"role": "system", "content": MIDDLE_REVIEWER_SYSTEM_PROMPT},
+        {"role": "user", "content": "\n".join(parts)},
+    ]
+
+
+# =============================================================================
 # 工具函数：格式化搜索结果给底层 Agent
 # =============================================================================
 
