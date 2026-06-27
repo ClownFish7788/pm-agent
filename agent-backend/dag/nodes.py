@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from agents.middle.market import MarketLeader
 from agents.middle.competitor import CompetitorLeader
+from agents.middle.product import ProductLeader
 from llm.base import BaseLLMProvider
 from prompts.templates import build_top_agent_prompt
 from schemas import (
@@ -41,6 +42,20 @@ from utils.logger import (
     log_phase,
     log_skip,
 )
+
+
+# =============================================================================
+# 辅助函数
+# =============================================================================
+
+def _confidence_emoji(level: str) -> str:
+    """将置信度等级转为 emoji 标签。"""
+    return {
+        "high": "🟢高",
+        "medium": "🟡中",
+        "low": "🟠低",
+        "uncertain": "🔴存疑",
+    }.get(level, "⚪未知")
 
 
 # =============================================================================
@@ -81,15 +96,12 @@ async def node_top_planning(
         )
     except Exception as e:
         log_error("node_top_planning", f"LLM 调用失败: {type(e).__name__}: {e}")
-        # 失败时使用默认计划（市场 + 竞品并行）
+        # 失败时使用默认计划（市场 + 竞品 + 产品并行）
+        enabled = (MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS, MiddleAgentType.PRODUCT_DESIGN)
         plan = ExecutionPlan(
-            steps=[MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS],
-            skipped=[m for m in MiddleAgentType if m not in (MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS)],
-            skip_reasons={
-                m.value: "MVP 阶段未实现"
-                for m in MiddleAgentType
-                if m not in (MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS)
-            },
+            steps=list(enabled),
+            skipped=[m for m in MiddleAgentType if m not in enabled],
+            skip_reasons={m.value: "MVP 阶段未实现" for m in MiddleAgentType if m not in enabled},
             focus_areas=["市场规模", "用户画像", "商业模式"],
             max_cycles=3,
         )
@@ -233,6 +245,52 @@ async def node_competitor_analysis(
 
 
 # =============================================================================
+# 节点 2c：产品设计（可与市场/竞品并行）
+# =============================================================================
+
+async def node_product_design(
+    state: GlobalState,
+    llm: BaseLLMProvider,
+    search_provider: BaseSearchProvider,
+) -> dict:
+    """DAG 节点 2c —— 中层产品设计 Leader 执行。
+
+    职责：
+    1. 创建 ProductLeader 并执行
+    2. 将结果填入 state.product_design
+
+    返回：
+        dict 包含 product_design、total_api_calls 的更新
+    """
+    log_phase("DAG 节点 2c: 产品设计 — 中层 Leader 执行")
+
+    plan = state.execution_plan
+    if plan is None:
+        log_error("node_product_design", "执行计划为空，跳过产品设计")
+        return {"errors": state.errors + ["执行计划为空，产品设计跳过"]}
+
+    project_summary = state.project.description
+    product_focus = ["功能设计", "MVP范围", "用户体验"]
+
+    product_leader = ProductLeader(
+        llm=llm,
+        search_provider=search_provider,
+    )
+
+    product_state = await product_leader.run(
+        project_summary=project_summary,
+        focus_areas=product_focus,
+    )
+
+    log_budget(llm.call_count, state.max_api_calls)
+
+    return {
+        "product_design": product_state,
+        "total_api_calls": llm.call_count,
+    }
+
+
+# =============================================================================
 # 节点 3：汇总报告
 # =============================================================================
 
@@ -271,13 +329,7 @@ async def node_aggregate(state: GlobalState) -> dict:
         print(f"\n  分析要点 ({len(market.key_points)} 条):")
 
         for i, point in enumerate(market.key_points, 1):
-            confidence_label = {
-                "high": "🟢高",
-                "medium": "🟡中",
-                "low": "🟠低",
-                "uncertain": "🔴存疑",
-            }.get(point.confidence_level, "⚪未知")
-
+            confidence_label = _confidence_emoji(point.confidence_level)
             print(f"\n    {i}. [{confidence_label}] {point.title}")
             print(f"       {point.content}")
             print(f"       📎 来源数: {point.source_count}")
@@ -296,13 +348,7 @@ async def node_aggregate(state: GlobalState) -> dict:
         print(f"\n  分析要点 ({len(competitor.key_points)} 条):")
 
         for i, point in enumerate(competitor.key_points, 1):
-            confidence_label = {
-                "high": "🟢高",
-                "medium": "🟡中",
-                "low": "🟠低",
-                "uncertain": "🔴存疑",
-            }.get(point.confidence_level, "⚪未知")
-
+            confidence_label = _confidence_emoji(point.confidence_level)
             print(f"\n    {i}. [{confidence_label}] {point.title}")
             print(f"       {point.content}")
             print(f"       📎 来源数: {point.source_count}")
@@ -310,8 +356,27 @@ async def node_aggregate(state: GlobalState) -> dict:
         print(f"\n  【竞品分析】⚠️ 无数据")
         errors.append("竞品分析未产生结果")
 
+    # ---- 产品设计看板 ----
+    product = state.product_design
+    if product is not None:
+        print(f"\n  【产品设计】")
+        print(f"  整体可信度: {product.overall_confidence:.0%}")
+        print(f"  状态: {product.status.value}")
+        if product.summary:
+            print(f"  摘要: {product.summary}")
+        print(f"\n  分析要点 ({len(product.key_points)} 条):")
+
+        for i, point in enumerate(product.key_points, 1):
+            confidence_label = _confidence_emoji(point.confidence_level)
+            print(f"\n    {i}. [{confidence_label}] {point.title}")
+            print(f"       {point.content}")
+            print(f"       📎 来源数: {point.source_count}")
+    else:
+        print(f"\n  【产品设计】⚠️ 无数据")
+        errors.append("产品设计未产生结果")
+
     # ---- 其余中层（MVP 为 None） ----
-    for name in ["product_design", "future_direction", "change_plan"]:
+    for name in ["future_direction", "change_plan"]:
         val = getattr(state, name, None)
         if val is not None:
             print(f"\n  【{name}】(预留)")

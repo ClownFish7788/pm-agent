@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from agents.middle.market import MarketLeader
 from agents.middle.competitor import CompetitorLeader
+from agents.middle.product import ProductLeader
 from llm.base import BaseLLMProvider
 from prompts.templates import build_top_agent_prompt
 from schemas import (
@@ -139,11 +140,12 @@ class TopAgent:
             state.total_api_calls = self.llm.call_count  # LLM Provider 内部自动计数
         except Exception as e:
             log_error("TopAgent", f"生成执行计划失败: {type(e).__name__}: {e}")
-            # 失败时使用默认计划（市场 + 竞品并行）
+            # 失败时使用默认计划（市场 + 竞品 + 产品并行）
+            enabled = (MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS, MiddleAgentType.PRODUCT_DESIGN)
             state.execution_plan = ExecutionPlan(
-                steps=[MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS],
-                skipped=[m for m in MiddleAgentType if m not in (MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS)],
-                skip_reasons={m.value: "MVP 阶段未实现" for m in MiddleAgentType if m not in (MiddleAgentType.MARKET_RESEARCH, MiddleAgentType.COMPETITOR_ANALYSIS)},
+                steps=list(enabled),
+                skipped=[m for m in MiddleAgentType if m not in enabled],
+                skip_reasons={m.value: "MVP 阶段未实现" for m in MiddleAgentType if m not in enabled},
                 focus_areas=["市场规模", "用户画像", "商业模式"],
                 max_cycles=3,
             )
@@ -227,6 +229,22 @@ class TopAgent:
                 )
 
                 state.competitor_analysis = competitor_state
+                state.total_api_calls = self.llm.call_count
+
+            elif step_type == MiddleAgentType.PRODUCT_DESIGN:
+                state.current_phase = "product_design"
+
+                product_leader = ProductLeader(
+                    llm=self.llm,
+                    search_provider=self.search_provider,
+                )
+
+                product_state = await product_leader.run(
+                    project_summary=project_summary,
+                    focus_areas=["功能设计", "MVP范围", "用户体验"],
+                )
+
+                state.product_design = product_state
                 state.total_api_calls = self.llm.call_count
 
             else:

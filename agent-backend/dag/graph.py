@@ -42,7 +42,7 @@ from schemas import GlobalState
 from search.base import BaseSearchProvider
 
 from .conditions import judge_market_quality
-from .nodes import node_top_planning, node_market_research, node_competitor_analysis, node_aggregate
+from .nodes import node_top_planning, node_market_research, node_competitor_analysis, node_product_design, node_aggregate
 
 # =============================================================================
 # 节点名称常量（避免字符串硬编码拼写错误）
@@ -54,6 +54,7 @@ from .nodes import node_top_planning, node_market_research, node_competitor_anal
 NODE_PLAN = "top_planning"              # 顶层规划
 NODE_MARKET = "run_market_research"     # 执行市场调研
 NODE_COMPETITOR = "run_competitor_analysis"  # 执行竞品分析
+NODE_PRODUCT = "run_product_design"        # 执行产品设计
 NODE_AGGREGATE = "aggregate"            # 汇总报告
 
 
@@ -103,6 +104,10 @@ def build_graph(
         """闭包包装：注入 llm + search_provider"""
         return await node_competitor_analysis(state, llm, search_provider)
 
+    async def _node_product(state: GlobalState) -> dict:
+        """闭包包装：注入 llm + search_provider"""
+        return await node_product_design(state, llm, search_provider)
+
     # node_aggregate 不需要 Provider（只读 state + print），直接用
     # 但签名要保持一致：async def fn(state) -> dict
 
@@ -114,15 +119,16 @@ def build_graph(
     builder.add_node(NODE_PLAN, _node_plan)
     builder.add_node(NODE_MARKET, _node_market)
     builder.add_node(NODE_COMPETITOR, _node_competitor)
+    builder.add_node(NODE_PRODUCT, _node_product)
     builder.add_node(NODE_AGGREGATE, _node_aggregate)
 
     # ---- 设置入口 ----
     builder.set_entry_point(NODE_PLAN)
 
-    # ---- 连线（并行 DAG） ----
-    # plan → market 和 plan → competitor 同时 fan-out（LangGraph 自动并行）
+    # ---- 连线（并行 DAG — 5 个中层全并行） ----
     builder.add_edge(NODE_PLAN, NODE_MARKET)
     builder.add_edge(NODE_PLAN, NODE_COMPETITOR)
+    builder.add_edge(NODE_PLAN, NODE_PRODUCT)
 
     # 条件边：market 执行完后，根据质量判断决定下一步
     # MVP 阶段 judge_market_quality() 始终返回 "pass"
@@ -136,10 +142,11 @@ def build_graph(
         },
     )
 
-    # 竞品分析完成后直接到汇总
+    # 竞品分析和产品设计完成后直接到汇总
     builder.add_edge(NODE_COMPETITOR, NODE_AGGREGATE)
+    builder.add_edge(NODE_PRODUCT, NODE_AGGREGATE)
 
-    # 汇总完成后结束（LangGraph 自动等待 market 和 competitor 都完成）
+    # 汇总完成后结束（LangGraph 自动等待所有中层都完成）
     builder.add_edge(NODE_AGGREGATE, END)
 
     # ---- 编译 ----

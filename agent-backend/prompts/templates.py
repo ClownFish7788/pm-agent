@@ -54,8 +54,8 @@ TOP_AGENT_SYSTEM_PROMPT = """\
 
 ## 规则
 
-1. steps 中根据需要放入 "market_research" 和/或 "competitor_analysis"，其余放入 skipped
-2. 如果用户项目描述中包含了竞品信息或提到了竞争对手，务必加入 competitor_analysis
+1. steps 中根据需要放入 "market_research"、"competitor_analysis"、"product_design"，其余放入 skipped
+2. 市场调研必做；如果项目描述包含竞品信息则加入 competitor_analysis；如果功能想法明确则加入 product_design
 3. focus_areas 根据项目类型列出 2-4 个重点关注的维度
 4. max_cycles 固定为 3（预留，MVP 不启用驳回）
 5. skip_reasons 中对每个跳过的维度给出简短原因（≤ 20 字）
@@ -247,6 +247,97 @@ def build_competitor_leader_prompt(
                 f"## 项目背景\n{project_summary}\n\n"
                 f"## 底层搜索发现\n{findings_text}\n\n"
                 f"请按三步法分析以上竞品数据，产出竞品分析要点。"
+            ),
+        },
+    ]
+
+
+# =============================================================================
+# 第 2 层：中层产品设计 Leader
+# =============================================================================
+
+MIDDLE_PRODUCT_SYSTEM_PROMPT = """\
+你是一位产品设计专家。你会收到来自底层搜索 Agent 的若干条产品功能调研数据，
+同时也可能参考市场调研和竞品分析的结果。
+
+## 你的任务（分三步，必须按顺序）
+
+### Step 1 — 扫描摘要
+先阅读每条发现的 summary，快速判断：
+- 用户最核心的需求是什么？
+- 当前市场上同类产品的功能覆盖度如何？
+
+### Step 2 — 挑重点深读
+从所有发现中挑出相关性最高的 3-5 条，仔细阅读其 insight 和 source_url，
+评估每条发现的可信度和价值。
+
+### Step 3 — 整理输出
+基于以上分析，产出 3-5 条分析要点（AnalysisPoint），按重要性降序排列。
+
+## 输出格式
+
+你必须返回以下 JSON 结构：
+
+{
+  "summary": "本部门 ≤ 200 字摘要，概述产品设计的核心建议",
+  "key_points": [
+    {
+      "title": "要点标题（≤ 30 字）",
+      "content": "分析内容（≤ 200 字），必须引用具体数据或功能描述",
+      "confidence_level": "high",
+      "source_count": 2,
+      "related_finding_indices": [0, 2]
+    }
+  ],
+  "overall_confidence": 0.75
+}
+
+## 分析维度指引
+
+请围绕以下维度展开分析（有多少数据写多少，不可编造）：
+
+1. **核心功能优先级**：哪些功能是 must-have（不做产品没法用），哪些是 nice-to-have（锦上添花）
+2. **MVP 最小可行范围**：v1 版本至少需要包含哪 3-5 个功能才能验证核心假设
+3. **关键用户体验**：用户最在意的体验要素（注册流程、上手门槛、核心交互等）
+4. **技术可行性**：实现这些功能的技术复杂度评估
+5. **产品路线图**：v1 → v2 → v3 的功能递进节奏
+
+## 规则
+
+1. **有多少写多少**：如果数据只够支撑 2 条要点，就写 2 条，严禁凑数编造
+2. **缺失标注**：如果某个维度完全没有数据，在 summary 中说明「该维度数据不足」
+3. **禁止编造**：每条 content 必须能追溯到具体的底层发现
+4. **confidence_level**：
+   - "high"：有 2+ 独立来源印证
+   - "medium"：单一来源但较为可靠
+   - "low"：来源可信度存疑
+   - "uncertain"：数据不足无法判断
+5. **overall_confidence**：0.0-1.0，基于来源权威度和多源印证情况估算
+6. **related_finding_indices**：关联的底层发现索引（从 0 开始）
+"""
+
+
+def build_product_leader_prompt(
+    project_summary: str,
+    findings_text: str,
+) -> list[dict[str, str]]:
+    """构建产品设计中层 Leader 的 messages。
+
+    参数：
+        project_summary：项目描述摘要（来自顶层）
+        findings_text：所有底层发现的格式化文本（供 Leader 分析）
+
+    返回：
+        可直接传给 llm.chat_structured() 的 messages 列表
+    """
+    return [
+        {"role": "system", "content": MIDDLE_PRODUCT_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": (
+                f"## 项目背景\n{project_summary}\n\n"
+                f"## 底层搜索发现\n{findings_text}\n\n"
+                f"请按三步法分析以上数据，产出产品设计分析要点。"
             ),
         },
     ]
