@@ -124,14 +124,20 @@ from search.tavily import TavilyProvider
 # 模式 1：控制台脚本
 # =============================================================================
 
-async def run_console(project_description: str) -> None:
+async def run_console(project_description: str, thread_id: str | None = None) -> None:
     """控制台模式 —— 完整分析链路，所有输出打印到终端。
 
     这是 MVP 的主要运行方式。创建 Provider，构建 DAG，
     调用 graph.ainvoke() 执行全链路分析。
 
+    Checkpoint 支持：
+    - 每次执行自动保存状态到 MemorySaver
+    - 中断后可用 --resume <thread_id> 恢复
+    - thread_id 默认为 "console-{timestamp}"
+
     参数：
         project_description：用户的项目描述文本
+        thread_id：可选，用于 checkpoint 恢复的会话 ID
     """
     # ---- 步骤 1：创建 Provider ----
     print("🔧 初始化 Provider...")
@@ -151,6 +157,12 @@ async def run_console(project_description: str) -> None:
         sys.exit(1)
 
     # ---- 步骤 2：构建初始 State ----
+    import time
+    if thread_id is None:
+        thread_id = f"console-{int(time.time())}"
+
+    config = {"configurable": {"thread_id": thread_id}}
+
     initial_state = GlobalState(
         project=ProjectInfo(description=project_description),
     )
@@ -158,14 +170,15 @@ async def run_console(project_description: str) -> None:
     # ---- 步骤 3：构建 LangGraph 图并执行 ----
     print("🔧 构建 DAG...")
     graph = _build_graph(llm, search)
-    print("  ✅ DAG 编译完成")
+    print(f"  ✅ DAG 编译完成 (checkpoint: MemorySaver, thread: {thread_id})")
 
     print(f"\n🚀 开始分析...\n")
     try:
-        final_state = await graph.ainvoke(initial_state)
-        print("\n✅ 分析流程结束")
+        final_state = await graph.ainvoke(initial_state, config)
+        print(f"\n✅ 分析流程结束 (thread: {thread_id})")
     except Exception as e:
         print(f"\n❌ 分析过程出错: {type(e).__name__}: {e}")
+        print(f"   💡 可用相同 thread_id 恢复: python main.py --resume {thread_id}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
@@ -239,19 +252,28 @@ else:
 if __name__ == "__main__":
     import asyncio
 
-    # 检查命令行参数
+    # === 解析命令行参数 ===
     if len(sys.argv) < 2:
         print("用法:")
         print("  python main.py \"你的项目描述\"")
+        print("  python main.py --resume <thread_id>  # 从 checkpoint 恢复")
         print()
         print("示例:")
         print("  python main.py \"我想做一个宠物社交App，连接同城的宠物主人\"")
+        print("  python main.py --resume console-1719500000")
         print()
         print("或启动 FastAPI 服务:")
         print("  uvicorn main:app --reload --port 8000")
         sys.exit(0)
 
-    project_description = sys.argv[1]
-
-    # 运行控制台模式
-    asyncio.run(run_console(project_description))
+    if sys.argv[1] == "--resume":
+        if len(sys.argv) < 3:
+            print("❌ --resume 需要指定 thread_id")
+            print("   示例: python main.py --resume console-1719500000")
+            sys.exit(1)
+        thread_id = sys.argv[2]
+        # 恢复模式：传入空项目描述（实际从 checkpoint 恢复，不需要）
+        asyncio.run(run_console("(从 checkpoint 恢复)", thread_id=thread_id))
+    else:
+        project_description = sys.argv[1]
+        asyncio.run(run_console(project_description))

@@ -96,6 +96,14 @@ async def node_top_planning(
     """
     log_phase("DAG 节点 1/3: 顶层规划 — 生成执行计划")
 
+    # 如果执行计划已存在（checkpoint 恢复 / 手动注入），跳过 LLM 调用
+    if state.execution_plan is not None:
+        print("  ⏭️  执行计划已存在，跳过规划阶段（checkpoint 恢复 / 手动注入）")
+        log_budget(llm.call_count, state.max_api_calls)
+        return {
+            "current_phase": "planning_done",
+        }
+
     project_text = state.project.description
 
     # ---- 调 LLM 生成执行计划 ----
