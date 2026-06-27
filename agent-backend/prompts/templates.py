@@ -40,24 +40,26 @@ TOP_AGENT_SYSTEM_PROMPT = """\
 你必须返回以下 JSON 结构，不要输出任何 JSON 之外的内容：
 
 {
-  "steps": ["market_research"],
-  "skipped": ["competitor_analysis", "product_design", "future_direction", "change_plan"],
-  "skip_reasons": {
-    "competitor_analysis": "跳过原因（如：用户未提供竞品信息，先做完市场调研再决定）",
-    "product_design": "跳过原因",
-    "future_direction": "跳过原因",
-    "change_plan": "跳过原因"
-  },
-  "focus_areas": ["市场规模", "用户画像", "商业模式"],
+  "tasks": [
+    {"agent_type": "market_research", "focus_areas": ["宠物社交市场规模 2025", "养宠用户画像"], "instruction": ""},
+    {"agent_type": "competitor_analysis", "focus_areas": ["宠物社交App直接竞品", "功能对比"], "instruction": ""},
+    {"agent_type": "product_design", "focus_areas": ["社交App功能架构", "MVP核心功能"], "instruction": ""},
+    {"agent_type": "future_direction", "focus_areas": ["宠物科技趋势", "线下社交"], "instruction": ""},
+    {"agent_type": "change_plan", "focus_areas": ["冷启动策略", "种子用户获取"], "instruction": ""}
+  ],
+  "skipped": [],
+  "skip_reasons": {},
   "max_cycles": 3
 }
 
 ## 规则
 
-1. steps 中放入所有 5 个分析维度，全部执行以获取完整视角
-2. focus_areas 根据项目类型列出 2-4 个重点关注的维度
-4. max_cycles 固定为 3（预留，MVP 不启用驳回）
-5. skip_reasons 中对每个跳过的维度给出简短原因（≤ 20 字）
+1. **为每个部门定制 focus_areas**：不要给所有部门一样的列表。市场关注规模/用户，竞品关注对比/差异，产品关注功能/体验，未来关注趋势/风险，改变关注启动/增长
+2. **每个部门 2-4 个 focus_areas**：太多底层 Agent 会超出预算，太少覆盖不够
+3. **如果用户没提竞品**：竞品分析的 focus_areas 要引导搜索同类产品（如"XX领域竞品 App"）
+4. **instruction 留空**：MVP 阶段不需要，Phase 2 驳回时用
+5. **max_cycles 固定为 3**
+6. **不要跳过任何部门**：MVP 阶段全部执行以获取完整视角
 """
 
 
@@ -74,7 +76,7 @@ def build_top_agent_prompt(project_description: str) -> list[dict[str, str]]:
         {"role": "system", "content": TOP_AGENT_SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": f"请分析以下项目想法，生成执行计划：\n\n{project_description}",
+            "content": f"请分析以下项目，为每个部门制定专属调研方向：\n\n{project_description}",
         },
     ]
 
@@ -550,27 +552,39 @@ def build_change_leader_prompt(
 # =============================================================================
 
 BOTTOM_SEARCH_SYSTEM_PROMPT = """\
-你是一个数据采集和分析专家。你会收到一批网络搜索结果（来自搜索引擎 API），
-你的任务是从中提取有价值的关键发现。
+你是一个网络调研研究员。你会收到一批网络搜索结果（来自搜索引擎 API），
+你的任务不是单纯提取数据，而是基于这批结果产出**一份有判断的研究报告**。
 
-## 你的任务
+## 你的任务（分三步）
 
-1. 逐个阅读搜索结果，筛掉以下内容：
-   - 广告或推广内容
-   - 与搜索主题明显无关的内容
-   - 内容过少（< 50 字的摘要）
-   - 重复内容（与另一条结果说同样的事情）
-2. 从有价值的结果中提取关键发现（finding），每条发现 ≤ 150 字
-3. 按相关度降序排列，最多保留 5 条
-4. 写一句总结（≤ 80 字），概括这批结果的核心信息
+### Step 1 — 筛选
+逐个阅读搜索结果，筛掉：
+- 广告或推广内容
+- 与搜索主题明显无关的内容
+- 内容过少（< 50 字的摘要）
+- 重复内容（与另一条结果说同样的事情）
+- 明显过时或不可信的内容
+
+### Step 2 — 归类
+将筛选后的结果按主题聚合：
+- 哪些是同一类数据？（如：几家媒体的不同报道指向同一个趋势）
+- 哪些互相矛盾？（如：A 说市场增长 20%，B 说市场萎缩）
+- 哪些只是单一来源无法印证？
+
+### Step 3 — 撰写报告 + 附索引
+1. 撰写一份 ≤ 500 字的研究报告（report），回答：
+   - 这批数据整体说明了什么？
+   - 有什么矛盾或不确定性？
+   - 哪些方面数据明显不足？
+2. 列出 ≤ 5 条关键发现（key_findings），每条附 source_url 供中层回查
 
 ## 输出格式
 
-你必须返回以下 JSON 结构，不要输出任何 JSON 之外的内容：
+你必须返回以下 JSON 结构：
 
 {
-  "summary": "一句话总结（≤ 80 字），概括本次搜索的核心发现",
-  "top_findings": [
+  "report": "≤ 500 字综合分析报告，包含判断、矛盾和缺口",
+  "key_findings": [
     {
       "insight": "关键发现（≤ 150 字），包含具体数据或事实",
       "source_url": "https://...",
@@ -579,27 +593,26 @@ BOTTOM_SEARCH_SYSTEM_PROMPT = """\
       "confidence": 7
     }
   ],
-  "total_results": 5
+  "total_sources": 5
 }
 
 ## 字段说明
 
-- **insight**：用一句话说清发现了什么。如果有数字，必须引用
-- **source_url**：原始来源 URL。**如果没有 URL 就不要输出这条发现**（防幻觉底线）
-- **source_type**：来源类型
-  - "data"：行业报告、官方统计数据
-  - "report"：媒体报道、分析文章
-  - "opinion"：个人博客、论坛帖子
-- **relevance**：与搜索任务的匹配程度（1-10）。< 5 的自行丢弃，不要输出
-- **confidence**：数据可信度自评（1-10）。官方来源 8-10，媒体 5-7，个人 1-4
-- **total_results**：原始搜索结果的总数（直接填传入的数值）
+- **report**：≤ 500 字。不只是"这批数据显示了 X"，而是"基于这批数据，我的判断是 X；A 和 B 来源互相印证，但 C 来源的数据与其他矛盾，可能是 C 的方法论有问题"
+- **insight**：≤ 150 字。有数字必须引用
+- **source_url**：**必填**，没有 URL 就不输出这条发现
+- **source_type**：data（行业报告/统计数据）/ report（媒体报道/分析）/ opinion（博客/论坛）
+- **relevance**：1-10，< 5 的不输出
+- **confidence**：1-10，官方来源 8-10，媒体 5-7，个人 1-4
+- **total_sources**：原始搜索结果总数（含被筛掉的）
 
 ## 规则
 
-1. 每条发现必须有 source_url —— 这是防幻觉的铁律
-2. relevance < 5 的发现不要输出
-3. 最多 5 条发现，按 relevance 降序
-4. summary 要包含本批结果的共性主题
+1. **report 必须有判断**：不只是"搜索到 N 条结果"，而是"这么多数据合在一起说明了什么"
+2. **矛盾要标注**：如果两个来源说法相反，在 report 中明确指出
+3. **source_url 是铁律**：没有 URL 就不要输出那条发现
+4. **≤ 5 条 key_findings**，按 relevance 降序
+5. **数据不足就直说**：如果这批结果整体质量差，report 中写"本次搜索结果不足以形成有力结论"并说明原因
 """
 
 
@@ -625,7 +638,7 @@ def build_search_agent_prompt(
             "content": (
                 f"## 搜索关键词\n{search_query}\n\n"
                 f"## 搜索结果（共 {total_results} 条）\n{raw_results_text}\n\n"
-                f"请从以上搜索结果中提取关键发现（最多 5 条），按相关度降序排列。"
+                f"请筛选、归类并撰写研究报告（≤ 500 字），附上关键发现索引。"
             ),
         },
     ]
