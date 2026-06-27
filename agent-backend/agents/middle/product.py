@@ -162,7 +162,7 @@ class ProductLeader:
         log_agent_output(
             agent_name="ProductLeader",
             agent_emoji="🎨",
-            input_summary=f"项目: {project_summary[:100]} | 搜索方向: {len(search_queries)} 个 | 关注: {focus_areas}",
+            input_summary=f"项目: {project_summary[:100]} | 搜索方向: {len(search_queries)} 个 | 关注: {task.focus_areas}",
             output={
                 "summary": state.summary[:200] if state.summary else "无",
                 "key_points_count": len(state.key_points),

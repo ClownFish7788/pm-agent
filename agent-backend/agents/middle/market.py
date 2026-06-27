@@ -141,7 +141,7 @@ class MarketLeader:
                 overall_confidence=0.0,
                 status=AgentStatus.UNCERTAIN,
                 project={"summary": project_summary},
-                focus_direction=", ".join(focus_areas),
+                focus_direction=", ".join(task.focus_areas),
                 sub_agents=sub_slots,
                 cycle_count=0,
             )
@@ -153,7 +153,7 @@ class MarketLeader:
             overall_confidence=raw_result.overall_confidence,
             status=AgentStatus.PASSED,
             project={"summary": project_summary},
-            focus_direction=", ".join(focus_areas),
+            focus_direction=", ".join(task.focus_areas),
             sub_agents=sub_slots,
             cycle_count=0,
         )
@@ -162,7 +162,7 @@ class MarketLeader:
         log_agent_output(
             agent_name="MarketLeader",
             agent_emoji="📊",
-            input_summary=f"项目: {project_summary[:100]} | 搜索方向: {len(search_queries)} 个 | 关注: {focus_areas}",
+            input_summary=f"项目: {project_summary[:100]} | 搜索方向: {len(search_queries)} 个 | 关注: {task.focus_areas}",
             output={
                 "summary": state.summary[:200] if state.summary else "无",
                 "key_points_count": len(state.key_points),
