@@ -5,31 +5,31 @@
 1. 接收顶层下发的项目信息 + 关注方向
 2. 根据关注方向生成 1-3 个未来趋势搜索关键词
 3. 每个关键词调度一个底层 SearchAgent
-4. 收集底层发现，调 LLM 综合分析
-5. 填充 FutureState 的 Public 字段
-6. 打印中间过程和最终输出
+4. 审核底层报告质量 → 低分驳回重做（最多 3 轮）
+5. 收集底层发现，调 LLM 综合分析
+6. 填充 FutureState 的 Public 字段
+7. 打印中间过程和最终输出
 
-MVP 简化：
-- 只生成 1-2 个搜索词
-- 不分步处理（一次性喂给 LLM）
-- 不启用驳回逻辑
-- 未来部门天然低可信度（0.4-0.7 正常）
-
-使用示例：
-    leader = FutureLeader(llm, search)
-    state = await leader.run(project_summary="宠物社交App", focus_areas=["技术趋势", "市场演进"])
+Phase 2 新增：
+- 审核 + 驳回循环（与 MarketLeader 相同模式）
+- 未来部门天然低可信度（0.4-0.7 正常），reviewer 已知此约束
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from agents.bottom.search import SearchAgent
 from llm.base import BaseLLMProvider
-from prompts.templates import build_future_leader_prompt
+from prompts.templates import build_future_leader_prompt, build_review_prompt
 from schemas import (
+    AgentStatus,
     DepartmentTask,
     FutureState,
+    RejectionEntry,
+    ReviewResult,
+    SubAgentReview,
     SubAgentSlot,
-    AgentStatus,
 )
 from search.base import BaseSearchProvider
 from utils.logger import log_agent_output, log_error
@@ -38,7 +38,7 @@ from utils.logger import log_agent_output, log_error
 class FutureLeader:
     """未来方向中层 Leader。
 
-    管理底层搜索 Agent，综合趋势数据为未来战略报告。
+    管理底层搜索 Agent，审核报告质量，综合趋势数据为未来战略报告。
     这是最推测性的部门——数据天然少，低置信度正常。
 
     属性：
@@ -54,38 +54,110 @@ class FutureLeader:
         self.llm = llm
         self.search_provider = search_provider
 
+    # ------------------------------------------------------------------
+    # 核心方法
+    # ------------------------------------------------------------------
+
     async def run(
         self,
         project_summary: str,
         task: DepartmentTask,
     ) -> FutureState:
-        """执行未来方向分析。"""
+        """执行未来方向分析（含审核 + 驳回循环）。"""
+        # ---- 步骤 1：生成搜索关键词 ----
         search_queries = self._generate_search_queries(task, project_summary)
         print(f"  🔮 [FutureLeader] 准备搜索 {len(search_queries)} 个方向:")
         for i, q in enumerate(search_queries, 1):
             print(f"      {i}. {q}")
 
+        # ---- 步骤 2：初始化子 Agent 卡槽 ----
         sub_slots: dict[str, SubAgentSlot] = {}
         for i, query in enumerate(search_queries):
             sub_id = f"future_query_{i + 1}"
-            sub_agent = SearchAgent(
-                agent_id=sub_id,
-                llm=self.llm,
-                search_provider=self.search_provider,
-            )
-            sub_output = await sub_agent.run(
-                search_query=query, max_results=5
-            )
             sub_slots[sub_id] = SubAgentSlot(
                 sub_id=sub_id,
                 search_query=query,
-                latest_output=sub_output,
-                round_number=1,
+                latest_output=None,
+                round_number=0,
                 rejection_log=[],
-                status=AgentStatus.PASSED,
+                status=AgentStatus.IDLE,
             )
 
+        # ---- 步骤 3：审核 + 驳回循环（最多 3 轮） ----
+        max_cycles = 3
+        cycle_count = 0
+
+        for cycle in range(1, max_cycles + 1):
+            cycle_count = cycle
+
+            pending_ids = [
+                sid for sid, slot in sub_slots.items()
+                if slot.status in (AgentStatus.IDLE, AgentStatus.REJECTED)
+            ]
+            if not pending_ids:
+                break
+
+            print(f"  🔮 [FutureLeader] 第 {cycle}/{max_cycles} 轮审核 — "
+                  f"待执行: {len(pending_ids)} 个子 Agent")
+
+            for sub_id in pending_ids:
+                slot = sub_slots[sub_id]
+                print(f"      🔍 {sub_id}: {slot.search_query}")
+                sub_agent = SearchAgent(
+                    agent_id=sub_id,
+                    llm=self.llm,
+                    search_provider=self.search_provider,
+                )
+                slot.latest_output = await sub_agent.run(
+                    search_query=slot.search_query,
+                    max_results=5,
+                )
+                slot.round_number = cycle
+
+            pending_slots = {sid: sub_slots[sid] for sid in pending_ids}
+            reviews = await self._review_sub_agents(pending_slots, project_summary)
+
+            all_passed = True
+            for review in reviews:
+                slot = sub_slots.get(review.sub_id)
+                if slot is None:
+                    continue
+
+                if review.verdict == "passed":
+                    slot.status = AgentStatus.PASSED
+                    print(f"      ✅ {review.sub_id}: 通过 "
+                          f"(overall={review.overall_score:.1f}, cred={review.credibility:.1f})")
+                else:
+                    all_passed = False
+                    slot.rejection_log.append(RejectionEntry(
+                        round=cycle,
+                        reason=review.reason,
+                        instruction=review.improved_query,
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                    ))
+                    if cycle < max_cycles:
+                        slot.status = AgentStatus.REJECTED
+                        slot.search_query = review.improved_query
+                        print(f"      ❌ {review.sub_id}: 驳回 (overall={review.overall_score:.1f})")
+                        print(f"         原因: {review.reason}")
+                        print(f"         新搜索词: {review.improved_query}")
+                    else:
+                        slot.status = AgentStatus.UNCERTAIN
+                        print(f"      ⚠️  {review.sub_id}: 超限放弃 (overall={review.overall_score:.1f})")
+                        print(f"         原因: {review.reason}")
+
+            if all_passed:
+                print(f"  🔮 [FutureLeader] 全部通过审核 ✅")
+                break
+
+        for slot in sub_slots.values():
+            if slot.status == AgentStatus.REJECTED:
+                slot.status = AgentStatus.UNCERTAIN
+
+        # ---- 步骤 4：汇总 ----
         findings_text = self._format_all_findings(sub_slots)
+
+        # ---- 步骤 5：LLM 综合分析 ----
         messages = build_future_leader_prompt(
             project_summary=project_summary,
             findings_text=findings_text,
@@ -106,7 +178,7 @@ class FutureLeader:
                 status=AgentStatus.UNCERTAIN,
                 project={"summary": project_summary},
                 sub_agents=sub_slots,
-                cycle_count=0,
+                cycle_count=cycle_count,
             )
 
         state = FutureState(
@@ -116,13 +188,13 @@ class FutureLeader:
             status=AgentStatus.PASSED,
             project={"summary": project_summary},
             sub_agents=sub_slots,
-            cycle_count=0,
+            cycle_count=cycle_count,
         )
 
         log_agent_output(
             agent_name="FutureLeader",
             agent_emoji="🔮",
-            input_summary=f"项目: {project_summary[:100]} | 搜索方向: {len(search_queries)} 个 | 关注: {task.focus_areas}",
+            input_summary=f"项目: {project_summary[:100]} | 审核轮次: {cycle_count} | 关注: {task.focus_areas}",
             output={
                 "summary": state.summary[:200] if state.summary else "无",
                 "key_points_count": len(state.key_points),
@@ -132,6 +204,8 @@ class FutureLeader:
                     sid: {
                         "query": slot.search_query,
                         "status": slot.status.value,
+                        "round": slot.round_number,
+                        "rejections": len(slot.rejection_log),
                         "findings_count": len(slot.latest_output.key_findings) if slot.latest_output else 0,
                     }
                     for sid, slot in sub_slots.items()
@@ -140,6 +214,61 @@ class FutureLeader:
         )
 
         return state
+
+    # ------------------------------------------------------------------
+    # 审核方法
+    # ------------------------------------------------------------------
+
+    async def _review_sub_agents(
+        self,
+        pending_slots: dict[str, SubAgentSlot],
+        project_summary: str,
+    ) -> list[SubAgentReview]:
+        """调 LLM 审核待审子 Agent 的研究报告。"""
+        sub_slots_info: list[dict] = []
+        for sub_id, slot in pending_slots.items():
+            info: dict = {
+                "sub_id": sub_id,
+                "search_query": slot.search_query,
+                "report": "",
+                "findings_count": 0,
+                "key_findings_summary": [],
+            }
+            if slot.latest_output is not None:
+                info["report"] = slot.latest_output.report
+                info["findings_count"] = len(slot.latest_output.key_findings)
+                for f in slot.latest_output.key_findings:
+                    info["key_findings_summary"].append(
+                        f"[{f.source_type}] {f.insight[:120]}"
+                    )
+            sub_slots_info.append(info)
+
+        messages = build_review_prompt(sub_slots_info, project_summary)
+
+        try:
+            result: ReviewResult = await self.llm.chat_structured(
+                messages=messages,
+                output_schema=ReviewResult,
+                max_tokens=2048,
+            )
+            return result.reviews
+        except Exception as e:
+            log_error("FutureLeader.review", f"审核调用失败: {type(e).__name__}: {e}")
+            return [
+                SubAgentReview(
+                    sub_id=info["sub_id"],
+                    overall_score=5.0, completeness=5.0,
+                    credibility=5.0, freshness=5.0, relevance=5.0,
+                    verdict="passed",
+                    reason="审核 LLM 调用失败，默认通过",
+                    improved_query="",
+                )
+                for info in sub_slots_info
+            ]
+
+    # ------------------------------------------------------------------
+    # 内部工具方法
+    # ------------------------------------------------------------------
 
     def _generate_search_queries(
         self, task: DepartmentTask, project_summary: str = ""
@@ -159,13 +288,32 @@ class FutureLeader:
 
         return queries
 
-    def _format_all_findings(self, sub_slots: dict[str, SubAgentSlot]) -> str:
+    def _format_all_findings(
+        self,
+        sub_slots: dict[str, SubAgentSlot],
+    ) -> str:
+        """将所有底层 Agent 的发现格式化为一段文本（含审核状态）。"""
         parts: list[str] = []
         finding_index = 0
 
         for sub_id, slot in sub_slots.items():
+            status_label = {
+                AgentStatus.PASSED: "✅ 已通过",
+                AgentStatus.UNCERTAIN: "⚠️ 存疑（多轮审核未达标）",
+                AgentStatus.REJECTED: "❌ 已驳回",
+                AgentStatus.RUNNING: "🔄 执行中",
+                AgentStatus.IDLE: "⏳ 待执行",
+                AgentStatus.SKIPPED: "⏭️ 已跳过",
+            }.get(slot.status, "❓ 未知")
+
             parts.append(f"=== 搜索方向: {slot.search_query} ===")
-            parts.append(f"Agent ID: {sub_id}")
+            parts.append(f"Agent ID: {sub_id} | 状态: {status_label} | 第 {slot.round_number} 轮")
+
+            if slot.rejection_log:
+                parts.append(f"驳回记录 ({len(slot.rejection_log)} 次):")
+                for r in slot.rejection_log:
+                    parts.append(f"  ⤷ 第 {r.round} 轮: {r.reason}")
+                    parts.append(f"     改进指令: {r.instruction}")
 
             if slot.latest_output is None:
                 parts.append("(无结果)")
@@ -173,7 +321,7 @@ class FutureLeader:
 
             output = slot.latest_output
             parts.append(f"研究报告: {output.report}")
-            parts.append(f"共 {len(output.key_findings)} 条发现:")
+            parts.append(f"共 {len(output.key_findings)} 条关键发现:")
             parts.append("")
 
             for finding in output.key_findings:
