@@ -30,9 +30,9 @@ from llm.base import BaseLLMProvider
 from prompts.templates import build_market_leader_prompt
 from schemas import (
     AnalysisPoint,
+    DepartmentTask,
     Finding,
     MarketResearchState,
-    SubAgentOutput,
     SubAgentSlot,
     AgentStatus,
 )
@@ -71,26 +71,19 @@ class MarketLeader:
     async def run(
         self,
         project_summary: str,
-        focus_areas: list[str],
+        task: DepartmentTask,
     ) -> MarketResearchState:
         """执行市场调研分析。
 
-        流程：
-        1. 根据关注方向生成搜索关键词
-        2. 每个关键词并行创建底层 SearchAgent
-        3. 收集所有 SubAgentOutput
-        4. 调 LLM 综合分析 → AnalysisPoint[]
-        5. 填充 MarketResearchState
-
         参数：
             project_summary：项目描述摘要（来自顶层 Agent）
-            focus_areas：关注维度列表，如 ["市场规模", "用户画像", "商业模式"]
+            task：顶层下发的专属任务（含 focus_areas + instruction）
 
         返回：
-            MarketResearchState 实例（Public 字段已填充）
+            MarketResearchState 实例
         """
-        # ---- 步骤 1：生成搜索关键词 ----
-        search_queries = self._generate_search_queries(project_summary, focus_areas)
+        # ---- 步骤 1：根据顶层给的 focus_areas 生成搜索关键词 ----
+        search_queries = self._generate_search_queries(project_summary, task.focus_areas)
         print(f"  📊 [MarketLeader] 准备搜索 {len(search_queries)} 个方向:")
 
         for i, q in enumerate(search_queries, 1):
@@ -109,7 +102,7 @@ class MarketLeader:
             )
 
             # 执行搜索 + LLM 提取
-            sub_output: SubAgentOutput = await sub_agent.run(
+            sub_output = await sub_agent.run(
                 search_query=query,
                 max_results=5,
             )
@@ -179,7 +172,7 @@ class MarketLeader:
                     sid: {
                         "query": slot.search_query,
                         "status": slot.status.value,
-                        "findings_count": len(slot.latest_output.top_findings) if slot.latest_output else 0,
+                        "findings_count": len(slot.latest_output.key_findings) if slot.latest_output else 0,
                     }
                     for sid, slot in sub_slots.items()
                 },
@@ -210,19 +203,11 @@ class MarketLeader:
             搜索关键词列表（1-2 个）
         """
         queries: list[str] = []
-
-        # 规则 1：如果有关注维度，每个维度生成一个搜索词
-        # 提取项目核心词（取 project_summary 的前 10 个字作为主题）
         core_topic = project_summary[:10] if len(project_summary) > 10 else project_summary
 
-        if focus_areas:
-            # MVP 只取前 2 个关注维度（控制 API 调用量）
-            for area in focus_areas[:2]:
-                queries.append(f"{core_topic} {area} 分析 2025")
-
-        # 规则 2：如果没有关注维度，默认搜市场规模
-        if not queries:
-            queries.append(f"{core_topic} 市场规模 分析 2025")
+        # 只用顶层给的 focus_areas，不做 fallback
+        for area in focus_areas[:2]:
+            queries.append(f"{core_topic} {area}")
 
         return queries
 
@@ -252,11 +237,11 @@ class MarketLeader:
                 continue
 
             output = slot.latest_output
-            parts.append(f"总结: {output.summary}")
-            parts.append(f"共 {len(output.top_findings)} 条发现:")
+            parts.append(f"研究报告: {output.report}")
+            parts.append(f"共 {len(output.key_findings)} 条关键发现:")
             parts.append("")
 
-            for j, finding in enumerate(output.top_findings):
+            for j, finding in enumerate(output.key_findings):
                 parts.append(f"  [{finding_index}] {finding.insight}")
                 parts.append(f"      来源: {finding.source_url}")
                 parts.append(f"      类型: {finding.source_type} | 相关度: {finding.relevance} | 可信度: {finding.confidence}")

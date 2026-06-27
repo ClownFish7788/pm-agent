@@ -26,8 +26,8 @@ from agents.bottom.search import SearchAgent
 from llm.base import BaseLLMProvider
 from prompts.templates import build_future_leader_prompt
 from schemas import (
+    DepartmentTask,
     FutureState,
-    SubAgentOutput,
     SubAgentSlot,
     AgentStatus,
 )
@@ -57,10 +57,10 @@ class FutureLeader:
     async def run(
         self,
         project_summary: str,
-        focus_areas: list[str],
+        task: DepartmentTask,
     ) -> FutureState:
         """执行未来方向分析。"""
-        search_queries = self._generate_search_queries(project_summary, focus_areas)
+        search_queries = self._generate_search_queries(project_summary, task.focus_areas)
         print(f"  🔮 [FutureLeader] 准备搜索 {len(search_queries)} 个方向:")
         for i, q in enumerate(search_queries, 1):
             print(f"      {i}. {q}")
@@ -73,7 +73,7 @@ class FutureLeader:
                 llm=self.llm,
                 search_provider=self.search_provider,
             )
-            sub_output: SubAgentOutput = await sub_agent.run(
+            sub_output = await sub_agent.run(
                 search_query=query, max_results=5
             )
             sub_slots[sub_id] = SubAgentSlot(
@@ -132,7 +132,7 @@ class FutureLeader:
                     sid: {
                         "query": slot.search_query,
                         "status": slot.status.value,
-                        "findings_count": len(slot.latest_output.top_findings) if slot.latest_output else 0,
+                        "findings_count": len(slot.latest_output.key_findings) if slot.latest_output else 0,
                     }
                     for sid, slot in sub_slots.items()
                 },
@@ -148,14 +148,8 @@ class FutureLeader:
     ) -> list[str]:
         queries: list[str] = []
         core_topic = project_summary[:10] if len(project_summary) > 10 else project_summary
-
-        if focus_areas:
-            for area in focus_areas[:2]:
-                queries.append(f"{core_topic} {area} 未来趋势 2025 2026")
-
-        if not queries:
-            queries.append(f"{core_topic} 行业趋势 发展方向 2025 2026")
-
+        for area in focus_areas[:2]:
+            queries.append(f"{core_topic} {area}")
         return queries
 
     def _format_all_findings(self, sub_slots: dict[str, SubAgentSlot]) -> str:
@@ -171,11 +165,11 @@ class FutureLeader:
                 continue
 
             output = slot.latest_output
-            parts.append(f"总结: {output.summary}")
-            parts.append(f"共 {len(output.top_findings)} 条发现:")
+            parts.append(f"研究报告: {output.report}")
+            parts.append(f"共 {len(output.key_findings)} 条发现:")
             parts.append("")
 
-            for finding in output.top_findings:
+            for finding in output.key_findings:
                 parts.append(f"  [{finding_index}] {finding.insight}")
                 parts.append(f"      来源: {finding.source_url}")
                 parts.append(f"      类型: {finding.source_type} | 相关度: {finding.relevance} | 可信度: {finding.confidence}")

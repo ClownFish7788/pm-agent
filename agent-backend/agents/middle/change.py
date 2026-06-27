@@ -26,7 +26,7 @@ from llm.base import BaseLLMProvider
 from prompts.templates import build_change_leader_prompt
 from schemas import (
     ChangeState,
-    SubAgentOutput,
+    DepartmentTask,
     SubAgentSlot,
     AgentStatus,
 )
@@ -56,10 +56,10 @@ class ChangeLeader:
     async def run(
         self,
         project_summary: str,
-        focus_areas: list[str],
+        task: DepartmentTask,
     ) -> ChangeState:
         """执行当下改变分析。"""
-        search_queries = self._generate_search_queries(project_summary, focus_areas)
+        search_queries = self._generate_search_queries(project_summary, task.focus_areas)
         print(f"  ⚡ [ChangeLeader] 准备搜索 {len(search_queries)} 个方向:")
         for i, q in enumerate(search_queries, 1):
             print(f"      {i}. {q}")
@@ -72,7 +72,7 @@ class ChangeLeader:
                 llm=self.llm,
                 search_provider=self.search_provider,
             )
-            sub_output: SubAgentOutput = await sub_agent.run(
+            sub_output = await sub_agent.run(
                 search_query=query, max_results=5
             )
             sub_slots[sub_id] = SubAgentSlot(
@@ -121,7 +121,7 @@ class ChangeLeader:
         log_agent_output(
             agent_name="ChangeLeader",
             agent_emoji="⚡",
-            input_summary=f"项目: {project_summary[:100]} | 搜索方向: {len(search_queries)} 个 | 关注: {focus_areas}",
+            input_summary=f"项目: {project_summary[:100]} | 搜索方向: {len(search_queries)} 个 | 关注: {task.focus_areas}",
             output={
                 "summary": state.summary[:200] if state.summary else "无",
                 "key_points_count": len(state.key_points),
@@ -131,7 +131,7 @@ class ChangeLeader:
                     sid: {
                         "query": slot.search_query,
                         "status": slot.status.value,
-                        "findings_count": len(slot.latest_output.top_findings) if slot.latest_output else 0,
+                        "findings_count": len(slot.latest_output.key_findings) if slot.latest_output else 0,
                     }
                     for sid, slot in sub_slots.items()
                 },
@@ -147,14 +147,8 @@ class ChangeLeader:
     ) -> list[str]:
         queries: list[str] = []
         core_topic = project_summary[:10] if len(project_summary) > 10 else project_summary
-
-        if focus_areas:
-            for area in focus_areas[:2]:
-                queries.append(f"{core_topic} {area} 启动 策略 2025")
-
-        if not queries:
-            queries.append(f"{core_topic} 冷启动 增长策略 必要条件 2025")
-
+        for area in focus_areas[:2]:
+            queries.append(f"{core_topic} {area}")
         return queries
 
     def _format_all_findings(self, sub_slots: dict[str, SubAgentSlot]) -> str:
@@ -170,11 +164,11 @@ class ChangeLeader:
                 continue
 
             output = slot.latest_output
-            parts.append(f"总结: {output.summary}")
-            parts.append(f"共 {len(output.top_findings)} 条发现:")
+            parts.append(f"研究报告: {output.report}")
+            parts.append(f"共 {len(output.key_findings)} 条发现:")
             parts.append("")
 
-            for finding in output.top_findings:
+            for finding in output.key_findings:
                 parts.append(f"  [{finding_index}] {finding.insight}")
                 parts.append(f"      来源: {finding.source_url}")
                 parts.append(f"      类型: {finding.source_type} | 相关度: {finding.relevance} | 可信度: {finding.confidence}")

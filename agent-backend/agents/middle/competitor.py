@@ -31,7 +31,7 @@ from prompts.templates import build_competitor_leader_prompt
 from schemas import (
     AnalysisPoint,
     CompetitorState,
-    SubAgentOutput,
+    DepartmentTask,
     SubAgentSlot,
     AgentStatus,
 )
@@ -70,7 +70,7 @@ class CompetitorLeader:
     async def run(
         self,
         project_summary: str,
-        focus_areas: list[str],
+        task: DepartmentTask,
     ) -> CompetitorState:
         """执行竞品分析。
 
@@ -89,7 +89,7 @@ class CompetitorLeader:
             CompetitorState 实例（Public 字段已填充）
         """
         # ---- 步骤 1：生成搜索关键词 ----
-        search_queries = self._generate_search_queries(project_summary, focus_areas)
+        search_queries = self._generate_search_queries(project_summary, task.focus_areas)
         print(f"  🏢 [CompetitorLeader] 准备搜索 {len(search_queries)} 个方向:")
 
         for i, q in enumerate(search_queries, 1):
@@ -106,7 +106,7 @@ class CompetitorLeader:
                 search_provider=self.search_provider,
             )
 
-            sub_output: SubAgentOutput = await sub_agent.run(
+            sub_output = await sub_agent.run(
                 search_query=query,
                 max_results=5,
             )
@@ -172,7 +172,7 @@ class CompetitorLeader:
                     sid: {
                         "query": slot.search_query,
                         "status": slot.status.value,
-                        "findings_count": len(slot.latest_output.top_findings) if slot.latest_output else 0,
+                        "findings_count": len(slot.latest_output.key_findings) if slot.latest_output else 0,
                     }
                     for sid, slot in sub_slots.items()
                 },
@@ -203,14 +203,8 @@ class CompetitorLeader:
         """
         queries: list[str] = []
         core_topic = project_summary[:10] if len(project_summary) > 10 else project_summary
-
-        if focus_areas:
-            for area in focus_areas[:2]:
-                queries.append(f"{core_topic} {area} 竞品 2025")
-
-        if not queries:
-            queries.append(f"{core_topic} 竞品分析 功能对比 2025")
-
+        for area in focus_areas[:2]:
+            queries.append(f"{core_topic} {area}")
         return queries
 
     def _format_all_findings(
@@ -239,11 +233,11 @@ class CompetitorLeader:
                 continue
 
             output = slot.latest_output
-            parts.append(f"总结: {output.summary}")
-            parts.append(f"共 {len(output.top_findings)} 条发现:")
+            parts.append(f"研究报告: {output.report}")
+            parts.append(f"共 {len(output.key_findings)} 条发现:")
             parts.append("")
 
-            for j, finding in enumerate(output.top_findings):
+            for j, finding in enumerate(output.key_findings):
                 parts.append(f"  [{finding_index}] {finding.insight}")
                 parts.append(f"      来源: {finding.source_url}")
                 parts.append(f"      类型: {finding.source_type} | 相关度: {finding.relevance} | 可信度: {finding.confidence}")
