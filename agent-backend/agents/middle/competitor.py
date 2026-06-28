@@ -23,9 +23,10 @@ Phase 2 新增：
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
-from agents.bottom.search import SearchAgent
+from agents.middle import _search_one
 from llm.base import BaseLLMProvider
 from prompts.templates import build_competitor_leader_prompt, build_review_prompt
 from schemas import (
@@ -105,18 +106,21 @@ class CompetitorLeader:
             print(f"  🏢 [CompetitorLeader] 第 {cycle}/{max_cycles} 轮审核 — "
                   f"待执行: {len(pending_ids)} 个子 Agent")
 
-            for sub_id in pending_ids:
+            # 并行搜索 —— 所有待审子 Agent 同时发起搜索 + LLM 分析
+            tasks = [
+                _search_one(sid, sub_slots[sid].search_query, self.llm, self.search_provider)
+                for sid in pending_ids
+            ]
+            results = await asyncio.gather(*tasks)
+
+            for sub_id, report, error in results:
                 slot = sub_slots[sub_id]
-                print(f"      🔍 {sub_id}: {slot.search_query}")
-                sub_agent = SearchAgent(
-                    agent_id=sub_id,
-                    llm=self.llm,
-                    search_provider=self.search_provider,
-                )
-                slot.latest_output = await sub_agent.run(
-                    search_query=slot.search_query,
-                    max_results=5,
-                )
+                if error is not None:
+                    slot.latest_output = None
+                    slot.status = AgentStatus.UNCERTAIN
+                    log_error(sub_id, f"搜索异常: {error}")
+                else:
+                    slot.latest_output = report
                 slot.round_number = cycle
 
             pending_slots = {sid: sub_slots[sid] for sid in pending_ids}
