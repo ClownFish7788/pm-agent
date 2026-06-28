@@ -46,6 +46,7 @@ from utils.logger import (
     log_phase,
     log_skip,
 )
+from utils.progress import ProgressTracker
 
 
 # =============================================================================
@@ -78,6 +79,8 @@ async def node_top_planning(
     state: GlobalState,
     llm: BaseLLMProvider,
     search_provider: BaseSearchProvider,
+    *,
+    tracker: ProgressTracker | None = None,
 ) -> dict:
     """DAG 节点 1 —— 顶层 Agent 生成执行计划。
 
@@ -139,6 +142,19 @@ async def node_top_planning(
         reason = plan.skip_reasons.get(skipped_type.value, "无")
         log_skip(f"计划跳过: {skipped_type.value}", reason)
 
+    # SSE: 计划生成
+    if tracker is not None:
+        tracker.plan_generated(
+            plan_data={
+                "task_count": len(plan.tasks),
+                "skipped_count": len(plan.skipped),
+                "tasks": {t.agent_type.value: t.focus_areas for t in plan.tasks},
+                "skipped": [s.value for s in plan.skipped],
+            },
+            call_count=llm.call_count,
+        )
+        tracker.budget(llm.call_count, state.max_api_calls)
+
     # ---- 返回状态更新 ----
     # call_count 由 LLM Provider 内部自动计数（chat/chat_structured 每次调用 +1）
     # 因为整个调用链共享同一个 llm 实例，直接读 llm.call_count 就是精确值
@@ -159,6 +175,8 @@ async def node_market_research(
     state: GlobalState,
     llm: BaseLLMProvider,
     search_provider: BaseSearchProvider,
+    *,
+    tracker: ProgressTracker | None = None,
 ) -> dict:
     """DAG 节点 2 —— 中层市场调研 Leader 执行。
 
@@ -191,7 +209,10 @@ async def node_market_research(
         return {}
 
     # ---- 创建并运行 MarketLeader ----
-    market_leader = MarketLeader(llm=llm, search_provider=search_provider)
+    if tracker is not None:
+        tracker.department_start(dept="market_research", focus_areas=task.focus_areas, call_count=llm.call_count)
+
+    market_leader = MarketLeader(llm=llm, search_provider=search_provider, tracker=tracker)
 
     market_state: MarketResearchState = await market_leader.run(
         project_summary=project_summary,
@@ -216,6 +237,8 @@ async def node_competitor_analysis(
     state: GlobalState,
     llm: BaseLLMProvider,
     search_provider: BaseSearchProvider,
+    *,
+    tracker: ProgressTracker | None = None,
 ) -> dict:
     """DAG 节点 2b —— 中层竞品分析 Leader 执行。
 
@@ -248,7 +271,10 @@ async def node_competitor_analysis(
         log_skip("competitor_analysis", "顶层未分配任务")
         return {}
 
-    competitor_leader = CompetitorLeader(llm=llm, search_provider=search_provider)
+    if tracker is not None:
+        tracker.department_start(dept="competitor_analysis", focus_areas=task.focus_areas, call_count=llm.call_count)
+
+    competitor_leader = CompetitorLeader(llm=llm, search_provider=search_provider, tracker=tracker)
 
     competitor_state = await competitor_leader.run(
         project_summary=project_summary,
@@ -271,6 +297,8 @@ async def node_product_design(
     state: GlobalState,
     llm: BaseLLMProvider,
     search_provider: BaseSearchProvider,
+    *,
+    tracker: ProgressTracker | None = None,
 ) -> dict:
     """DAG 节点 2c —— 中层产品设计 Leader 执行。
 
@@ -295,7 +323,10 @@ async def node_product_design(
         log_skip("product_design", "顶层未分配任务")
         return {}
 
-    product_leader = ProductLeader(llm=llm, search_provider=search_provider)
+    if tracker is not None:
+        tracker.department_start(dept="product_design", focus_areas=task.focus_areas, call_count=llm.call_count)
+
+    product_leader = ProductLeader(llm=llm, search_provider=search_provider, tracker=tracker)
 
     product_state = await product_leader.run(
         project_summary=project_summary,
@@ -318,6 +349,8 @@ async def node_future_direction(
     state: GlobalState,
     llm: BaseLLMProvider,
     search_provider: BaseSearchProvider,
+    *,
+    tracker: ProgressTracker | None = None,
 ) -> dict:
     """DAG 节点 2d —— 中层未来方向 Leader 执行。"""
     log_phase("DAG 节点 2d: 未来方向 — 中层 Leader 执行")
@@ -327,7 +360,10 @@ async def node_future_direction(
         log_skip("future_direction", "顶层未分配任务")
         return {}
 
-    future_leader = FutureLeader(llm=llm, search_provider=search_provider)
+    if tracker is not None:
+        tracker.department_start(dept="future_direction", focus_areas=task.focus_areas, call_count=llm.call_count)
+
+    future_leader = FutureLeader(llm=llm, search_provider=search_provider, tracker=tracker)
     future_state = await future_leader.run(
         project_summary=state.project.description,
         task=task,
@@ -348,6 +384,8 @@ async def node_change_plan(
     state: GlobalState,
     llm: BaseLLMProvider,
     search_provider: BaseSearchProvider,
+    *,
+    tracker: ProgressTracker | None = None,
 ) -> dict:
     """DAG 节点 2e —— 中层当下改变 Leader 执行。"""
     log_phase("DAG 节点 2e: 当下改变 — 中层 Leader 执行")
@@ -357,7 +395,10 @@ async def node_change_plan(
         log_skip("change_plan", "顶层未分配任务")
         return {}
 
-    change_leader = ChangeLeader(llm=llm, search_provider=search_provider)
+    if tracker is not None:
+        tracker.department_start(dept="change_plan", focus_areas=task.focus_areas, call_count=llm.call_count)
+
+    change_leader = ChangeLeader(llm=llm, search_provider=search_provider, tracker=tracker)
     change_state = await change_leader.run(
         project_summary=state.project.description,
         task=task,
@@ -377,6 +418,8 @@ async def node_change_plan(
 async def node_aggregate(
     state: GlobalState,
     llm: BaseLLMProvider,
+    *,
+    tracker: ProgressTracker | None = None,
 ) -> dict:
     """DAG 节点 3 —— CEO 智能汇总：跨部门交叉分析。
 
@@ -420,11 +463,18 @@ async def node_aggregate(
     except Exception as e:
         log_error("node_aggregate", f"CEO 汇总分析失败: {type(e).__name__}: {e}")
         errors.append(f"CEO 汇总分析失败: {e}")
+        if tracker is not None:
+            tracker.error(f"CEO 汇总分析失败: {e}", phase="completed")
         return {
             "current_phase": "completed",
             "errors": errors,
             "total_api_calls": llm.call_count,
         }
+
+    # SSE: 推送完整 FinalReport + done 标记
+    if tracker is not None:
+        tracker.budget(llm.call_count, state.max_api_calls)
+        tracker.final_report_done(report, llm.call_count)
 
     # ---- 打印 FinalReport ----
     _print_ceo_report(report, state)

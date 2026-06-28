@@ -25,6 +25,7 @@ from prompts.templates import build_search_agent_prompt, format_search_results_f
 from schemas import SearchOptions, BottomReport
 from search.base import BaseSearchProvider
 from utils.logger import log_agent_output, log_error
+from utils.progress import ProgressTracker
 
 
 class SearchAgent:
@@ -37,6 +38,8 @@ class SearchAgent:
         agent_id：唯一标识，如 "market_size_query"，用于日志
         llm：LLM Provider（依赖注入）
         search_provider：Search Provider（依赖注入）
+        department：所属部门名（如 "market_research"），用于 SSE 事件
+        tracker：ProgressTracker 或 None（None = 不推送事件）
     """
 
     def __init__(
@@ -44,10 +47,15 @@ class SearchAgent:
         agent_id: str,
         llm: BaseLLMProvider,
         search_provider: BaseSearchProvider,
+        *,
+        department: str | None = None,
+        tracker: ProgressTracker | None = None,
     ) -> None:
         self.agent_id = agent_id
         self.llm = llm
         self.search_provider = search_provider
+        self.department = department
+        self.tracker = tracker
 
     async def run(
         self,
@@ -79,10 +87,21 @@ class SearchAgent:
             print(f"  🔍 [{self.agent_id}] 搜索完成，返回 {len(raw_results)} 条结果")
         except Exception as e:
             log_error(self.agent_id, f"搜索失败: {type(e).__name__}: {e}")
+            if self.tracker is not None:
+                self.tracker.error(f"搜索失败: {e}", department=self.department, agent_id=self.agent_id)
             return BottomReport(
                 report=f"搜索失败: {str(e)[:200]}",
                 key_findings=[],
                 total_sources=0,
+            )
+
+        # SSE: 搜索完成
+        if self.tracker is not None:
+            self.tracker.sub_agent_search(
+                dept=self.department or "unknown",
+                agent_id=self.agent_id,
+                result_count=len(raw_results),
+                call_count=self.llm.call_count,
             )
 
         if not raw_results:
@@ -121,6 +140,16 @@ class SearchAgent:
                 report=f"LLM 分析失败: {str(e)[:200]}",
                 key_findings=[],
                 total_sources=len(raw_results),
+            )
+
+        # SSE: LLM 分析完成
+        if self.tracker is not None:
+            self.tracker.sub_agent_done(
+                dept=self.department or "unknown",
+                agent_id=self.agent_id,
+                report_summary=result.report,
+                findings_count=len(result.key_findings),
+                call_count=self.llm.call_count,
             )
 
         # ---- 步骤 4：打印输出 ----

@@ -63,6 +63,7 @@ from schemas import (
     ProductDesignState,
 )
 from search.base import BaseSearchProvider
+from utils.progress import ProgressTracker
 
 from .nodes import (
     node_top_planning,
@@ -104,6 +105,8 @@ NODE_SKIP_CHANGE = "skip_change_plan"
 def build_graph(
     llm: BaseLLMProvider,
     search_provider: BaseSearchProvider,
+    *,
+    tracker: ProgressTracker | None = None,
 ) -> Any:
     """构建并编译 PM Agent 的 LangGraph 图（含 Skip 路由 + Checkpoint）。
 
@@ -135,25 +138,25 @@ def build_graph(
     # 解决办法：在 build_graph() 中创建闭包，提前绑定 Provider
 
     async def _node_plan(state: GlobalState) -> dict:
-        return await node_top_planning(state, llm, search_provider)
+        return await node_top_planning(state, llm, search_provider, tracker=tracker)
 
     async def _node_market(state: GlobalState) -> dict:
-        return await node_market_research(state, llm, search_provider)
+        return await node_market_research(state, llm, search_provider, tracker=tracker)
 
     async def _node_competitor(state: GlobalState) -> dict:
-        return await node_competitor_analysis(state, llm, search_provider)
+        return await node_competitor_analysis(state, llm, search_provider, tracker=tracker)
 
     async def _node_product(state: GlobalState) -> dict:
-        return await node_product_design(state, llm, search_provider)
+        return await node_product_design(state, llm, search_provider, tracker=tracker)
 
     async def _node_future(state: GlobalState) -> dict:
-        return await node_future_direction(state, llm, search_provider)
+        return await node_future_direction(state, llm, search_provider, tracker=tracker)
 
     async def _node_change(state: GlobalState) -> dict:
-        return await node_change_plan(state, llm, search_provider)
+        return await node_change_plan(state, llm, search_provider, tracker=tracker)
 
     async def _node_aggregate(state: GlobalState) -> dict:
-        return await node_aggregate(state, llm)
+        return await node_aggregate(state, llm, tracker=tracker)
 
     # ===== Skip 节点闭包 =====
     # 被顶层跳过的部门 → 返回 SKIPPED 状态，聚合节点可展示跳过原因

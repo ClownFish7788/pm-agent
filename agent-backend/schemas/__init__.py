@@ -677,3 +677,40 @@ class SearchResult(BaseModel):
     content: str = Field(description="搜索结果摘要/正文片段")
     score: float = Field(default=0.0, description="搜索相关度得分（Provider 返回的原始值）")
     published_date: str | None = Field(default=None, description="发布时间（如有）")
+
+
+# =============================================================================
+# SSE 进度事件类型
+# =============================================================================
+
+
+class SSEEventType(str, Enum):
+    """SSE 推送的事件类型枚举 —— 覆盖全链路关键节点。"""
+    PLAN_GENERATED = "plan_generated"           # Top Agent 产出 ExecutionPlan
+    DEPARTMENT_START = "department_start"        # 某中层开始执行
+    DEPARTMENT_SKIP = "department_skip"          # 某中层被计划跳过
+    SUB_AGENT_START = "sub_agent_start"          # 底层 SearchAgent 启动搜索
+    SUB_AGENT_SEARCH = "sub_agent_search"        # Tavily 搜索完成（返回条数）
+    SUB_AGENT_DONE = "sub_agent_done"            # LLM 筛选+分析完成（含报告摘要）
+    SUB_AGENT_REVIEW = "sub_agent_review"        # 审核结果（passed/rejected + 四维分）
+    DEPARTMENT_DONE = "department_done"          # 中层综合分析完成
+    FINAL_REPORT = "final_report"                # CEO 汇总 FinalReport JSON
+    BUDGET_UPDATE = "budget_update"              # LLM 调用计数更新
+    ERROR = "error"                              # 非致命错误
+    DONE = "done"                                # 分析流程结束
+
+
+class ProgressEvent(BaseModel):
+    """SSE 流式推送的进度事件。
+
+    每个关键节点发出一个 ProgressEvent，前端可据此渲染进度条、搜索动画、
+    部门卡片等实时 UI。data 字段的 key 因 event_type 而异，文档详见每个 emit 点。
+    """
+    event_type: SSEEventType = Field(description="事件类型")
+    timestamp: str = Field(description="ISO 8601 时间戳")
+    message: str = Field(default="", description="人类可读消息")
+    phase: str | None = Field(default=None, description="当前阶段")
+    department: str | None = Field(default=None, description="部门名")
+    agent_id: str | None = Field(default=None, description="子 Agent ID")
+    data: dict = Field(default_factory=dict, description="结构化 payload")
+    call_count: int = Field(default=0, description="当前 LLM API 调用计数")

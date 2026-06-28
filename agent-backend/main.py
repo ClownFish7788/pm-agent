@@ -118,6 +118,12 @@ from dag.graph import build_graph as _build_graph
 from llm.deepseek import DeepSeekProvider
 from schemas import GlobalState, ProjectInfo
 from search.tavily import TavilyProvider
+from utils.progress import ProgressTracker
+
+# =============================================================================
+# SSE 会话存储（按 thread_id 索引，服务重启丢失）
+# =============================================================================
+_sessions: dict[str, ProgressTracker] = {}
 
 
 # =============================================================================
@@ -167,9 +173,10 @@ async def run_console(project_description: str, thread_id: str | None = None) ->
         project=ProjectInfo(description=project_description),
     )
 
-    # ---- 步骤 3：构建 LangGraph 图并执行 ----
+    # ---- 步骤 3：构建 ProgressTracker + LangGraph 图并执行 ----
+    tracker = ProgressTracker(use_queue=False)
     print("🔧 构建 DAG...")
-    graph = _build_graph(llm, search)
+    graph = _build_graph(llm, search, tracker=tracker)
     print(f"  ✅ DAG 编译完成 (checkpoint: MemorySaver, thread: {thread_id})")
 
     print(f"\n🚀 开始分析...\n")
@@ -185,63 +192,175 @@ async def run_console(project_description: str, thread_id: str | None = None) ->
 
 
 # =============================================================================
-# 模式 2：FastAPI 服务（Phase 2 预留骨架）
+# 模式 2：FastAPI 服务
 # =============================================================================
 
 # 尝试导入 FastAPI（如果未安装 poetry 依赖，跳过）
 try:
     from fastapi import FastAPI
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, StreamingResponse
     import uvicorn
-
     _fastapi_available = True
 except ImportError:
     _fastapi_available = False
 
 
 if _fastapi_available:
-    # ---- 创建 FastAPI 应用 ----
     app = FastAPI(
         title="PM Agent Backend",
         description="AI 项目经理分析系统的 Agent 后端",
-        version="0.1.0",
+        version="0.2.0",
     )
+
+    # =========================================================================
+    # 共享工具：创建 Provider + 执行 DAG
+    # =========================================================================
+
+    async def _run_analysis(description: str, thread_id: str, tracker: ProgressTracker) -> None:
+        """执行完整 DAG 分析链路，结果通过 tracker 事件流推送。
+
+        Args:
+            description: 用户项目描述
+            thread_id: 会话 ID（用于 checkpoint 恢复和会话索引）
+            tracker: ProgressTracker 实例（SSE 模式带 queue，非 SSE 模式不带）
+        """
+        llm = DeepSeekProvider()
+        search = TavilyProvider()
+        graph = _build_graph(llm, search, tracker=tracker)
+        config = {"configurable": {"thread_id": thread_id}}
+        initial_state = GlobalState(project=ProjectInfo(description=description))
+
+        try:
+            await graph.ainvoke(initial_state, config)
+        except Exception as e:
+            tracker.error(f"分析流程异常: {type(e).__name__}: {e}", phase="error")
+
+    # =========================================================================
+    # GET /health — 健康检查
+    # =========================================================================
 
     @app.get("/health")
     async def health_check():
-        """健康检查端点。
+        """返回后端服务状态。"""
+        return {"status": "ok", "service": "pm-agent-backend", "version": "0.2.0"}
 
-        返回后端服务状态。前端可在发起分析前调此端点确认后端存活。
-        """
-        return {
-            "status": "ok",
-            "service": "pm-agent-backend",
-            "version": "0.1.0",
-        }
+    # =========================================================================
+    # POST /analyze — 非 SSE，一次性返回全部事件 + FinalReport
+    # =========================================================================
 
     @app.post("/analyze")
     async def analyze(request_data: dict):
-        """分析端点 —— 【Phase 2 预留，MVP 未实现】。
+        """分析端点（非 SSE）—— 阻塞等待分析完成后一次性返回。
 
-        计划接收前端发来的项目描述，通过 SSE 流式推送分析进度。
-        MVP 阶段返回占位响应，请使用控制台模式。
+        用于不支持 SSE 的客户端，或需要直接拿到完整报告的调用方。
 
-        参数：
-            request_data：{"description": "用户项目描述", ...}
+        Request Body:
+            {"description": "用户项目描述"}
 
-        返回：
-            占位 JSON
+        Response:
+            {"events": [...], "final_report": {...} | null}
+            其中 events 数组包含全链路 ProgressEvent
         """
-        return JSONResponse(
-            status_code=501,
-            content={
-                "status": "not_implemented",
-                "message": "SSE 分析端点尚未实现，请使用控制台模式: python main.py '项目描述'",
+        description = request_data.get("description", "")
+        if not description:
+            return JSONResponse(status_code=400, content={"error": "description 不能为空"})
+
+        import time
+        thread_id = f"api-{int(time.time())}"
+        tracker = ProgressTracker(use_queue=False)
+        _sessions[thread_id] = tracker
+
+        await _run_analysis(description, thread_id, tracker)
+        return tracker.snapshot()
+
+    # =========================================================================
+    # POST /analyze/stream — SSE 流式推送
+    # =========================================================================
+
+    @app.post("/analyze/stream")
+    async def analyze_stream(request_data: dict):
+        """分析端点（SSE 流式）—— 实时推送每个进度事件。
+
+        Request Body:
+            {"description": "用户项目描述"}
+
+        Response:
+            text/event-stream，每行 JSON 序列化的 ProgressEvent
+            以 event: {event_type} 开头，data: {json} 紧随其后
+
+        事件类型（详见 schemas/SSEEventType）：
+            plan_generated    — 顶层计划产出
+            budget_update     — LLM 调用计数更新
+            department_start  — 中层部门启动
+            department_skip   — 中层部门跳过
+            sub_agent_start   — 底层搜索启动
+            sub_agent_search  — Tavily 搜索完成
+            sub_agent_done    — LLM 筛选分析完成
+            sub_agent_review  — 中层审核结果
+            department_done   — 部门综合分析完成
+            final_report      — CEO 综合报告（完整 JSON）
+            error             — 非致命错误
+            done              — 流结束
+        """
+        description = request_data.get("description", "")
+        if not description:
+            return JSONResponse(status_code=400, content={"error": "description 不能为空"})
+
+        import time
+        import json
+        import asyncio as _asyncio
+
+        thread_id = f"sse-{int(time.time())}"
+        tracker = ProgressTracker(use_queue=True)
+        _sessions[thread_id] = tracker
+
+        async def event_generator():
+            """SSE 事件生成器 —— 逐 yield SSE 格式行。"""
+            # 后台执行 DAG（不阻塞 SSE 流）
+            _ = _asyncio.create_task(_run_analysis(description, thread_id, tracker))
+
+            # 流式推送事件
+            async for event in tracker.stream():
+                yield f"event: {event.event_type.value}\n"
+                yield f"data: {json.dumps(event.model_dump(), ensure_ascii=False)}\n\n"
+
+            # 清理
+            _sessions.pop(thread_id, None)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲
             },
         )
 
+    # =========================================================================
+    # GET /analyze/{thread_id} — 中断恢复 / 查询
+    # =========================================================================
+
+    @app.get("/analyze/{thread_id}")
+    async def analyze_recover(thread_id: str):
+        """中断恢复端点 —— 返回指定 thread 的当前所有事件和最终报告。
+
+        使用场景：
+        1. SSE 连接中断后，用 thread_id 拉取当前进度
+        2. 轮询模式下定期查询进度
+
+        Response:
+            {"events": [...], "final_report": {...} | null}
+        """
+        tracker = _sessions.get(thread_id)
+        if tracker is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"会话不存在: {thread_id}", "hint": "会话可能已过期或服务已重启"},
+            )
+        return tracker.snapshot()
+
 else:
-    # FastAPI 未安装时，app 变量为 None
     app = None
 
 

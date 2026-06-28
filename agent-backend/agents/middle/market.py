@@ -44,6 +44,7 @@ from schemas import (
 )
 from search.base import BaseSearchProvider
 from utils.logger import log_agent_output, log_error
+from utils.progress import ProgressTracker
 
 
 class MarketLeader:
@@ -54,21 +55,28 @@ class MarketLeader:
     属性：
         llm：LLM Provider（依赖注入）
         search_provider：Search Provider（依赖注入，传给底层 Agent）
+        tracker：ProgressTracker 或 None（SSE 事件推送）
     """
+
+    DEPT = "market_research"
 
     def __init__(
         self,
         llm: BaseLLMProvider,
         search_provider: BaseSearchProvider,
+        *,
+        tracker: ProgressTracker | None = None,
     ) -> None:
         """初始化市场调研 Leader。
 
         参数：
             llm：LLM Provider 实例
             search_provider：Search Provider 实例（会传给底层 SearchAgent 用）
+            tracker：ProgressTracker 实例（可选，None = 不推送 SSE）
         """
         self.llm = llm
         self.search_provider = search_provider
+        self.tracker = tracker
 
     # ------------------------------------------------------------------
     # 核心方法
@@ -126,9 +134,18 @@ class MarketLeader:
                   f"待执行: {len(pending_ids)} 个子 Agent")
 
             # 3b：并行搜索 —— 所有待审子 Agent 同时发起搜索 + LLM 分析
-            # _search_one 异常内化：单个失败不影响其他 task，返回三元组 (sub_id, report, error)
+            # SSE: 每个子 Agent 启动事件
+            for sid in pending_ids:
+                if self.tracker is not None:
+                    self.tracker.sub_agent_start(
+                        dept=self.DEPT, agent_id=sid,
+                        search_query=sub_slots[sid].search_query,
+                        call_count=self.llm.call_count,
+                    )
+
             tasks = [
-                _search_one(sid, sub_slots[sid].search_query, self.llm, self.search_provider)
+                _search_one(sid, sub_slots[sid].search_query, self.llm, self.search_provider,
+                            department=self.DEPT, tracker=self.tracker)
                 for sid in pending_ids
             ]
             results = await asyncio.gather(*tasks)
@@ -180,6 +197,17 @@ class MarketLeader:
                         print(f"      ⚠️  {review.sub_id}: 超限放弃 (overall={review.overall_score:.1f})")
                         print(f"         原因: {review.reason}")
 
+                # SSE: 审核结果
+                if self.tracker is not None:
+                    self.tracker.sub_agent_review(
+                        dept=self.DEPT, agent_id=review.sub_id,
+                        verdict=review.verdict,
+                        overall=review.overall_score,
+                        credibility=review.credibility,
+                        reason=review.reason,
+                        call_count=self.llm.call_count,
+                    )
+
             if all_passed:
                 print(f"  📊 [MarketLeader] 全部通过审核 ✅")
                 break
@@ -206,6 +234,8 @@ class MarketLeader:
             )
         except Exception as e:
             log_error("MarketLeader", f"LLM 综合分析失败: {type(e).__name__}: {e}")
+            if self.tracker is not None:
+                self.tracker.error(f"LLM 综合分析失败: {e}", department=self.DEPT)
             return MarketResearchState(
                 summary=f"市场调研分析失败: {str(e)[:200]}",
                 key_points=[],
@@ -228,6 +258,17 @@ class MarketLeader:
             sub_agents=sub_slots,
             cycle_count=cycle_count,
         )
+
+        # SSE: 部门完成
+        if self.tracker is not None:
+            self.tracker.department_done(
+                dept=self.DEPT,
+                summary=state.summary or "",
+                key_points_count=len(state.key_points),
+                confidence=state.overall_confidence,
+                status=state.status.value,
+                call_count=self.llm.call_count,
+            )
 
         # ---- 步骤 7：打印输出 ----
         log_agent_output(
