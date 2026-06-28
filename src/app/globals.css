@@ -1,26 +1,137 @@
 @import "tailwindcss";
 
+/* =============================================================================
+   青竹 (Bamboo) 设计系统 —— 色彩 Token
+   清新绿色为主调，区别于默认 Tailwind 绿色
+   ============================================================================= */
+
+@theme {
+  /* 竹青渐变：从浅到深 */
+  --color-bamboo-50: #F7FAF8;
+  --color-bamboo-100: #EDF4EF;
+  --color-bamboo-200: #DCE8E0;
+  --color-bamboo-300: #B8D0BE;
+  --color-bamboo-400: #8AA597;
+  --color-bamboo-500: #5B7B68;
+  --color-bamboo-600: #3D5A46;
+  --color-bamboo-700: #2A4032;
+  --color-bamboo-800: #1C2621;
+
+  /* 主交互色 */
+  --color-accent: #219C5B;
+  --color-accent-hover: #1A7D48;
+  --color-accent-subtle: #E8F5EE;
+}
+
+/* =============================================================================
+   全局基础
+   ============================================================================= */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --background: #F7FAF8;
+  --foreground: #1C2621;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* =============================================================================
+   问候区渐变光晕 —— 签名元素
+   柔和径向渐变模拟晨光透过竹叶洒落
+   ============================================================================= */
+
+.greeting-glow {
+  position: relative;
+}
+
+.greeting-glow::before {
+  content: '';
+  position: absolute;
+  top: -140px;
+  left: 5%;
+  width: 480px;
+  height: 480px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 40% 40%,
+    rgba(33, 156, 91, 0.09) 0%,
+    rgba(33, 156, 91, 0.04) 35%,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* 晚上时段微调：更暖更柔和 */
+.greeting-glow.evening::before {
+  background: radial-gradient(
+    circle at 40% 40%,
+    rgba(33, 156, 91, 0.06) 0%,
+    rgba(180, 140, 80, 0.03) 35%,
+    transparent 70%
+  );
+}
+
+/* =============================================================================
+   输入框聚焦效果
+   ============================================================================= */
+
+.input-glow:focus-within {
+  box-shadow:
+    0 0 0 2px rgba(33, 156, 91, 0.15),
+    0 4px 24px rgba(33, 156, 91, 0.06);
+}
+
+/* =============================================================================
+   侧边栏链接基础样式
+   ============================================================================= */
+
+.sidebar-link {
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-link.active {
+  background-color: var(--color-accent-subtle);
+  color: var(--color-accent);
+  font-weight: 500;
+}
+
+/* =============================================================================
+   滚动条美化
+   ============================================================================= */
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-bamboo-200);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-bamboo-300);
+}
+
+/* =============================================================================
+   建议标签 hover
+   ============================================================================= */
+
+.suggestion-chip {
+  transition: all 0.15s ease;
+}
+
+.suggestion-chip:hover {
+  background-color: var(--color-accent-subtle);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
 }
