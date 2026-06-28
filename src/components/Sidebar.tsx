@@ -7,21 +7,6 @@ import { usePathname } from "next/navigation";
 /* 内联 SVG 图标                                                               */
 /* --------------------------------------------------------------------------- */
 
-function ChatIcon({ active }: { active: boolean }) {
-  return (
-    <svg
-      width="18" height="18" viewBox="0 0 18 18" fill="none"
-      stroke={active ? "currentColor" : "#5B7B68"} strokeWidth="1.5"
-      strokeLinecap="round" strokeLinejoin="round"
-    >
-      <path d="M14.4 3.6H3.6C2.61 3.6 1.8 4.41 1.8 5.4V10.8C1.8 11.79 2.61 12.6 3.6 12.6H5.4V16.2L9 12.6H14.4C15.39 12.6 16.2 11.79 16.2 10.8V5.4C16.2 4.41 15.39 3.6 14.4 3.6Z" />
-      <circle cx="6.3" cy="8.1" r="0.9" fill={active ? "currentColor" : "#5B7B68"} stroke="none" />
-      <circle cx="9" cy="8.1" r="0.9" fill={active ? "currentColor" : "#5B7B68"} stroke="none" />
-      <circle cx="11.7" cy="8.1" r="0.9" fill={active ? "currentColor" : "#5B7B68"} stroke="none" />
-    </svg>
-  );
-}
-
 function HistoryIcon() {
   return (
     <svg
@@ -143,15 +128,6 @@ export default function Sidebar() {
 
       {/* ---- 导航 ---- */}
       <nav className="flex flex-col gap-0.5 px-3 flex-1">
-        <Link
-          href="/"
-          className={`sidebar-link flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm no-underline
-            ${isActive("/") ? "active" : "text-bamboo-600 hover:bg-bamboo-200/60"}`}
-        >
-          <ChatIcon active={isActive("/")} />
-          新对话
-        </Link>
-
         <Link
           href="/history"
           className={`sidebar-link flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm no-underline
