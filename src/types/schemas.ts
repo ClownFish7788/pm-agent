@@ -210,10 +210,9 @@ export interface PlanGeneratedEvent {
   data: {
     task_count: number;
     skipped_count: number;
-    tasks: DepartmentTask[];
+    /** key = agent_type, value = focus_areas (后端以 dict 而非数组发送) */
+    tasks: Record<string, string[]>;
     skipped: string[];
-    skip_reasons: Record<string, string>;
-    max_cycles: number;
   };
   call_count: number;
 }
