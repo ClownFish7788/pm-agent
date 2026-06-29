@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { analysisSession } from "@/stores/analysisSession";
+import { settingsStore } from "@/stores/settingsStore";
 
 /* --------------------------------------------------------------------------- */
 /* 快捷建议项                                                                   */
@@ -65,7 +66,8 @@ export default function ChatInput() {
     setSubmitting(true);
 
     // 启动 SSE 会话（独立于 React 生命周期）
-    analysisSession.start("/api/analyze/stream", { description });
+    const url = settingsStore.get().backendUrl;
+    analysisSession.start(url, { description });
 
     // URL 只放路由 ID，description 存在 analysisSession 里
     const id = Date.now().toString(36);

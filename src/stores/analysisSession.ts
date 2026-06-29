@@ -9,6 +9,7 @@ import type { AnalysisState } from "@/types/analysis";
 import { analysisReducer, INITIAL_STATE } from "@/hooks/analysisReducer";
 import { connectSSE } from "@/lib/sse";
 import { reportStore } from "./reportStore";
+import { settingsStore } from "./settingsStore";
 
 // =============================================================================
 // 内部状态
@@ -20,7 +21,9 @@ let _listeners = new Set<(s: AnalysisState) => void>();
 let _isActive = false;
 let _description = "";
 
-const FIRST_RESPONSE_TIMEOUT_MS = 30_000; // 首次 POST 请求超时
+function getTimeout(): number {
+  return settingsStore.get().firstByteTimeout * 1000;
+}
 
 // =============================================================================
 // 公开 API
@@ -62,9 +65,10 @@ export const analysisSession = {
 
     // 首次请求熔断：30s 内 POST 必须返回响应头
     const firstByteController = new AbortController();
+    const timeoutMs = getTimeout();
     const firstByteTimer = setTimeout(
       () => firstByteController.abort(),
-      FIRST_RESPONSE_TIMEOUT_MS
+      timeoutMs
     );
 
     fetch(url, {
@@ -98,7 +102,7 @@ export const analysisSession = {
             ..._state,
             errors: [
               ..._state.errors,
-              `连接超时（${FIRST_RESPONSE_TIMEOUT_MS / 1000}s）：后端无响应，请确认 FastAPI 已启动`,
+              `连接超时（${timeoutMs / 1000}s）：后端无响应，请确认 FastAPI 已启动`,
             ],
           };
         } else {

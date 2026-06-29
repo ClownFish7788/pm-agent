@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import SettingsModal from "./SettingsModal";
 
 /* --------------------------------------------------------------------------- */
 /* 内联 SVG 图标                                                               */
@@ -73,6 +75,7 @@ function LoginIcon() {
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/";
@@ -149,13 +152,13 @@ export default function Sidebar() {
 
       {/* ---- 底部 ---- */}
       <div className="px-3 pb-5 flex flex-col gap-0.5 border-t border-bamboo-200 pt-3 mx-3">
-        <Link
-          href="/settings"
-          className="sidebar-link flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-bamboo-500 hover:bg-bamboo-200/60 no-underline"
+        <button
+          onClick={() => setSettingsOpen(true)}
+          className="sidebar-link flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-bamboo-500 hover:bg-bamboo-200/60 no-underline w-full text-left cursor-pointer"
         >
           <SettingsIcon />
           设置
-        </Link>
+        </button>
 
         <Link
           href="/login"
@@ -165,6 +168,8 @@ export default function Sidebar() {
           登录
         </Link>
       </div>
+
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </aside>
   );
 }
