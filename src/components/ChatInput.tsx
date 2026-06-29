@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import { analysisSession } from "@/stores/analysisSession";
 
 /* --------------------------------------------------------------------------- */
 /* 快捷建议项                                                                   */
@@ -19,7 +21,9 @@ const SUGGESTIONS = [
 
 export default function ChatInput() {
   const [value, setValue] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const router = useRouter();
 
   /* ---- 自动调整高度 ---- */
   const autoResize = useCallback(() => {
@@ -46,12 +50,20 @@ export default function ChatInput() {
     });
   };
 
-  /* ---- 提交（预留） ---- */
-  const handleSubmit = () => {
-    if (!value.trim()) return;
-    // TODO: 调用后端 POST /analyze/stream
-    console.log("提交分析:", value);
-  };
+  /* ---- 提交 ---- */
+  const handleSubmit = useCallback(() => {
+    const description = value.trim();
+    if (!description || submitting) return;
+
+    setSubmitting(true);
+
+    // 启动 SSE 会话（独立于 React 生命周期）
+    analysisSession.start("/api/analyze/stream", { description });
+
+    // URL 只放路由 ID，description 存在 analysisSession 里
+    const id = Date.now().toString(36);
+    router.push(`/chat/${id}`);
+  }, [value, submitting, router]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Enter 提交，Shift+Enter 换行
@@ -61,7 +73,7 @@ export default function ChatInput() {
     }
   };
 
-  const canSubmit = value.trim().length > 0;
+  const canSubmit = value.trim().length > 0 && !submitting;
 
   return (
     <div className="w-full max-w-[680px] mx-auto">
