@@ -20,6 +20,8 @@ let _listeners = new Set<(s: AnalysisState) => void>();
 let _isActive = false;
 let _description = "";
 
+const FIRST_RESPONSE_TIMEOUT_MS = 30_000; // 首次 POST 请求超时
+
 // =============================================================================
 // 公开 API
 // =============================================================================
@@ -48,44 +50,63 @@ export const analysisSession = {
   /** 发起分析 */
   start(url: string, body: Record<string, unknown>): void {
     // 先清理上一个会话
-    if (_controller) {
-      _controller.abort();
-    }
+    this.abort();
 
     // 保存描述
     _description = (body.description as string) || "";
 
-    // 重置
+    // 重置状态
     _state = { ...INITIAL_STATE };
     _isActive = true;
     _notifyAll();
 
-    _controller = new AbortController();
+    // 首次请求熔断：30s 内 POST 必须返回响应头
+    const firstByteController = new AbortController();
+    const firstByteTimer = setTimeout(
+      () => firstByteController.abort(),
+      FIRST_RESPONSE_TIMEOUT_MS
+    );
 
-    connectSSE(url, body, _controller.signal, (event) => {
-      _state = analysisReducer(_state, event);
-      _notifyAll();
-
-      // finalReport 产出 → 写入内存 + sessionStorage
-      if (event.event_type === "final_report") {
-        reportStore.set(event.data);
-      }
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: firstByteController.signal,
     })
-      .catch((err: unknown) => {
-        if (_controller?.signal.aborted) return;
-        const msg = err instanceof Error ? err.message : String(err);
-        _state = {
-          ..._state,
-          errors: [..._state.errors, msg],
-        };
-        _notifyAll();
-      })
-      .finally(() => {
-        _isActive = false;
-        if (!_controller?.signal.aborted) {
-          _notifyAll();
+      .then((res) => {
+        clearTimeout(firstByteTimer);
+        if (!res.ok) {
+          throw new Error(`后端返回 HTTP ${res.status}`);
         }
-        _controller = null;
+
+        // 首次响应成功 → SSE 流开始，不再限制时间
+        // LLM 思考可能 30s+，后续事件流不限时
+        _controller = new AbortController();
+        return connectSSE(url, body, _controller.signal, (event) => {
+          _state = analysisReducer(_state, event);
+          _notifyAll();
+
+          if (event.event_type === "final_report") {
+            reportStore.set(event.data);
+          }
+        });
+      })
+      .catch((err: unknown) => {
+        clearTimeout(firstByteTimer);
+        if (err instanceof DOMException && err.name === "AbortError") {
+          _state = {
+            ..._state,
+            errors: [
+              ..._state.errors,
+              `连接超时（${FIRST_RESPONSE_TIMEOUT_MS / 1000}s）：后端无响应，请确认 FastAPI 已启动`,
+            ],
+          };
+        } else {
+          const msg = err instanceof Error ? err.message : String(err);
+          _state = { ..._state, errors: [..._state.errors, msg] };
+        }
+        _isActive = false;
+        _notifyAll();
       });
   },
 
@@ -104,7 +125,7 @@ export const analysisSession = {
    */
   subscribe(listener: (s: AnalysisState) => void): () => void {
     _listeners.add(listener);
-    listener(_state); // 立即同步
+    listener(_state);
     return () => {
       _listeners.delete(listener);
     };
@@ -116,7 +137,6 @@ export const analysisSession = {
 // =============================================================================
 
 function _notifyAll(): void {
-  // 快照迭代：防止 listener 里 unsubscribe 导致 Set 变异
   const snapshot = [..._listeners];
   for (const fn of snapshot) {
     try {

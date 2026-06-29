@@ -7,12 +7,15 @@
 
 "use client";
 
+import { useParams } from "next/navigation";
 import { useSSE } from "@/hooks/useSSE";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { analysisSession } from "@/stores/analysisSession";
 import AnalysisView from "@/components/AnalysisView";
 
 export default function ChatPage() {
+  const params = useParams();
+  const analysisId = (params.id as string) ?? "unknown";
   const { state, isConnected, error, abort } = useSSE();
   const { containerRef, onScroll, locked, scrollToBottom } = useAutoScroll({
     dependency: state,
@@ -56,7 +59,7 @@ export default function ChatPage() {
       onScroll={onScroll}
       className="h-full overflow-y-auto"
     >
-      <AnalysisView state={state} isConnected={isConnected} />
+      <AnalysisView state={state} isConnected={isConnected} analysisId={analysisId} />
 
       {/* 解锁提示：用户向上翻看时显示浮动的"回到底部"按钮 */}
       {!locked && (

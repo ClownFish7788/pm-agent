@@ -28,13 +28,20 @@ export default function ReportPage() {
   const [liveReport, setLiveReport] = useState<FinalReport | null>(
     () => analysisSession.getState().finalReport
   );
+  const [liveCallCount, setLiveCallCount] = useState(
+    () => analysisSession.getState().callCount
+  );
+  const [liveDeptCount, setLiveDeptCount] = useState(() => {
+    const plan = analysisSession.getState().plan;
+    return plan?.taskCount ?? 5;
+  });
 
-  // 订阅 analysisSession —— 分析还在后台跑时也能实时拿到 finalReport
+  // 订阅 analysisSession —— 实时拿到 finalReport + callCount
   useEffect(() => {
     return analysisSession.subscribe((s) => {
-      if (s.finalReport) {
-        setLiveReport(s.finalReport);
-      }
+      if (s.finalReport) setLiveReport(s.finalReport);
+      setLiveCallCount(s.callCount);
+      if (s.plan) setLiveDeptCount(s.plan.taskCount);
     });
   }, []);
 
@@ -44,6 +51,8 @@ export default function ReportPage() {
     reportStore.get() ??    // 2. sessionStorage 缓存
     MOCK_REPORT;            // 3. 开发期占位
 
+  const callCount = liveCallCount > 0 ? liveCallCount : 33;
+  const deptCount = liveDeptCount > 0 ? liveDeptCount : 5;
   const isLive = analysisSession.isActive;
 
   return (
@@ -77,8 +86,8 @@ export default function ReportPage() {
 
       <ReportView
         report={report}
-        departmentCount={5}
-        callCount={33}
+        departmentCount={deptCount}
+        callCount={callCount}
       />
     </div>
   );

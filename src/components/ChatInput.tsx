@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { analysisSession } from "@/stores/analysisSession";
 
@@ -24,6 +24,13 @@ export default function ChatInput() {
   const [submitting, setSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const router = useRouter();
+
+  // 如果用户从 Chat 页返回首页，session 已结束 → 重置 submitting
+  useEffect(() => {
+    if (!analysisSession.isActive) {
+      setSubmitting(false);
+    }
+  }, []);
 
   /* ---- 自动调整高度 ---- */
   const autoResize = useCallback(() => {

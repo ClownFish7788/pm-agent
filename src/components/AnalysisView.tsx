@@ -12,6 +12,8 @@ import DepartmentCard from "./DepartmentCard";
 interface AnalysisViewProps {
   state: AnalysisState;
   isConnected?: boolean;
+  /** 当前分析会话 ID（用于跳转 report 页） */
+  analysisId?: string;
 }
 
 /** 顶部阶段指示器（含思考圈） */
@@ -74,7 +76,7 @@ function ProgressHeader({
 }
 
 /** 完成横幅 */
-function CompletionBanner({ score }: { score: number }) {
+function CompletionBanner({ score, analysisId }: { score: number; analysisId?: string }) {
   const router = useRouter();
 
   return (
@@ -89,7 +91,7 @@ function CompletionBanner({ score }: { score: number }) {
           </p>
         </div>
         <button
-          onClick={() => router.push("/report/demo-1")}
+          onClick={() => router.push(`/report/${analysisId || "demo-1"}`)}
           className="
             inline-flex items-center gap-1.5
             px-4 py-2 rounded-xl
@@ -116,7 +118,7 @@ function CompletionBanner({ score }: { score: number }) {
 /* 组件主体                                                                    */
 /* --------------------------------------------------------------------------- */
 
-export default function AnalysisView({ state, isConnected }: AnalysisViewProps) {
+export default function AnalysisView({ state, isConnected, analysisId }: AnalysisViewProps) {
   const { plan, departments } = state;
   const deptEntries = Object.entries(departments);
   const completedCount = deptEntries.filter(
@@ -157,7 +159,7 @@ export default function AnalysisView({ state, isConnected }: AnalysisViewProps) 
 
       {/* 完成横幅 */}
       {isCompleted && (
-        <CompletionBanner score={state.finalReport!.overall_score} />
+        <CompletionBanner score={state.finalReport!.overall_score} analysisId={analysisId} />
       )}
 
       {/* 错误列表 */}
