@@ -135,7 +135,8 @@ MIDDLE_MARKET_SYSTEM_PROMPT = """\
       "related_finding_indices": [0, 2]
     }
   ],
-  "overall_confidence": 0.75
+  "overall_confidence": 0.75,
+  "metrics_coverage": {}
 }
 
 ## 规则
@@ -150,10 +151,11 @@ MIDDLE_MARKET_SYSTEM_PROMPT = """\
    - "uncertain"：数据不足无法判断
 5. **overall_confidence**：0.0-1.0，基于来源权威度和多源印证情况估算
 6. **related_finding_indices**：关联的底层发现索引（从 0 开始）
-7. **conclusion**（新增）：≤ 200 字，基于以上数据你的核心判断——不是复述数据，而是"我认为..."
-8. **recommendations**（新增）：≤ 3 条给 CEO 的建议，每条 ≤ 100 字
-9. **gaps**（新增）：≤ 3 条数据缺口，明确标注哪些维度本次没有覆盖到
-10. 如果数据不够支撑结论，conclusion 中可以写"数据不足以形成明确判断"，不要编造
+7. **conclusion**：≤ 200 字，基于以上数据你的核心判断——不是复述数据，而是"我认为..."
+8. **recommendations**：≤ 3 条给 CEO 的建议，每条 ≤ 100 字
+9. **gaps**：≤ 3 条数据缺口，明确标注哪些维度本次没有覆盖到
+10. **metrics_coverage**：如果任务附带了考核指标，逐一回应完成状态（"已覆盖"/"部分覆盖"/"未覆盖"）
+11. 如果数据不够支撑结论，conclusion 中可以写"数据不足以形成明确判断"，不要编造
 """
 
 
@@ -229,7 +231,8 @@ MIDDLE_COMPETITOR_SYSTEM_PROMPT = """\
   "gaps": [
     "数据缺口 1：某维度数据不足，建议补充",
     "数据缺口 2"
-  ]
+  ],
+  "metrics_coverage": {}
 }
 
 ## 分析维度指引
@@ -257,8 +260,9 @@ MIDDLE_COMPETITOR_SYSTEM_PROMPT = """\
 6. **related_finding_indices**：关联的底层发现索引（从 0 开始）
 7. **conclusion**（新增）：≤ 200 字，基于以上数据你的核心判断——不是复述数据，而是"我认为..."
 8. **recommendations**（新增）：≤ 3 条给 CEO 的建议，每条 ≤ 100 字
-9. **gaps**（新增）：≤ 3 条数据缺口，明确标注哪些维度本次没有覆盖到
-10. 如果数据不够支撑结论，conclusion 中可以写"数据不足以形成明确判断"，不要编造
+9. **gaps**：≤ 3 条数据缺口，明确标注哪些维度本次没有覆盖到
+10. **metrics_coverage**：如果任务附带了考核指标，逐一回应完成状态
+11. 如果数据不够支撑结论，conclusion 中可以写"数据不足以形成明确判断"，不要编造
 """
 
 
@@ -334,7 +338,8 @@ MIDDLE_PRODUCT_SYSTEM_PROMPT = """\
   "gaps": [
     "数据缺口 1：某维度数据不足，建议补充",
     "数据缺口 2"
-  ]
+  ],
+  "metrics_coverage": {}
 }
 
 ## 分析维度指引
@@ -361,8 +366,9 @@ MIDDLE_PRODUCT_SYSTEM_PROMPT = """\
 6. **related_finding_indices**：关联的底层发现索引（从 0 开始）
 7. **conclusion**（新增）：≤ 200 字，基于以上数据你的核心判断——不是复述数据，而是"我认为..."
 8. **recommendations**（新增）：≤ 3 条给 CEO 的建议，每条 ≤ 100 字
-9. **gaps**（新增）：≤ 3 条数据缺口，明确标注哪些维度本次没有覆盖到
-10. 如果数据不够支撑结论，conclusion 中可以写"数据不足以形成明确判断"，不要编造
+9. **gaps**：≤ 3 条数据缺口，明确标注哪些维度本次没有覆盖到
+10. **metrics_coverage**：如果任务附带了考核指标，逐一回应完成状态
+11. 如果数据不够支撑结论，conclusion 中可以写"数据不足以形成明确判断"，不要编造
 """
 
 
@@ -438,7 +444,8 @@ MIDDLE_FUTURE_SYSTEM_PROMPT = """\
   "gaps": [
     "数据缺口 1：某维度数据不足，建议补充",
     "数据缺口 2"
-  ]
+  ],
+  "metrics_coverage": {}
 }
 
 ## 分析维度指引
@@ -458,6 +465,7 @@ MIDDLE_FUTURE_SYSTEM_PROMPT = """\
 3. **缺失标注**：如果某个维度完全没有数据，在 summary 中说明「该维度数据不足」
 4. **confidence_level**：high/medium/low/uncertain（同其他中层标准）
 5. **overall_confidence**：未来部门天然偏低（0.4-0.7 正常），不要为了凑数调高
+6. **metrics_coverage**：如果任务附带了考核指标，逐一回应完成状态
 """
 
 
@@ -533,7 +541,8 @@ MIDDLE_CHANGE_SYSTEM_PROMPT = """\
   "gaps": [
     "数据缺口 1：某维度数据不足，建议补充",
     "数据缺口 2"
-  ]
+  ],
+  "metrics_coverage": {}
 }
 
 ## 分析维度指引
@@ -552,6 +561,7 @@ MIDDLE_CHANGE_SYSTEM_PROMPT = """\
 2. **具体优于抽象**：能给出数字就给出数字范围（如"2-3人团队，2-3个月开发"）
 3. **缺失标注**：如果某个维度完全没有数据，在 summary 中说明
 4. **confidence_level**：high/medium/low/uncertain（同其他中层标准）
+5. **metrics_coverage**：如果任务附带了考核指标，逐一回应完成状态
 """
 
 

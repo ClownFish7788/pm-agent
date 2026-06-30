@@ -501,7 +501,7 @@ class GlobalState(BaseModel):
     total_api_calls: Annotated[int, _max_reducer] = Field(
         default=0, description="已消耗的 LLM API 调用次数"
     )
-    max_api_calls: int = Field(default=30, description="LLM 调用硬上限（熔断器）")
+    max_api_calls: int = Field(default=60, description="LLM 调用硬上限（熔断器）")
     current_phase: str = Field(default="init", description="当前执行阶段标识")
     errors: Annotated[list[str], _op_add] = Field(
         default_factory=list, description="非致命错误收集"
