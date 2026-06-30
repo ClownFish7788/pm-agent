@@ -69,7 +69,7 @@ export default function SkillAddModal({
         id: Math.random().toString(36).slice(2, 8),
         name: f.name,
         content: f.content,
-        mode: "file" as const,
+        mode: "paste" as const,  // 内容已加载，用粘贴模式展示
         fileName: f.name,
       }));
     }
@@ -97,7 +97,7 @@ export default function SkillAddModal({
           id: Math.random().toString(36).slice(2, 8),
           name: f.name,
           content: f.content,
-          mode: "file" as const,
+          mode: "paste" as const,  // 内容已加载，用粘贴模式展示
           fileName: f.name,
         }))
       );
@@ -162,14 +162,14 @@ export default function SkillAddModal({
     const name = skillName.trim();
     if (!name) return;
 
+    // 收集有内容的文件条目，文件名为空时自动生成
     const files: SkillFile[] = entries
-      .filter((e) => {
-        const n = e.name.trim();
-        const c = e.content.trim();
-        return n && c;
-      })
-      .map((e) => ({
-        name: e.name.trim() || e.fileName || "untitled.md",
+      .filter((e) => e.content.trim())
+      .map((e, i) => ({
+        name:
+          e.name.trim() ||
+          e.fileName ||
+          `${name}-${i + 1}.md`,
         content: e.content.trim(),
       }));
 
@@ -179,7 +179,10 @@ export default function SkillAddModal({
 
   if (!open) return null;
 
-  const canSave = skillName.trim() && entries.some((e) => e.name.trim() && e.content.trim());
+  /* ---- 保存按钮状态：有 skill 名 + 有任一文件内容即可 ---- */
+  const canSave =
+    skillName.trim().length > 0 &&
+    entries.some((e) => e.content.trim().length > 0);
 
   return createPortal(
     <div
