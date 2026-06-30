@@ -292,9 +292,14 @@ export default function SkillAddModal({
                       }
                       placeholder="文件名.md"
                       className="
-                        flex-1 bg-transparent
+                        flex-1
+                        px-2 py-0.5 rounded
+                        bg-white border border-bamboo-100
                         text-xs text-bamboo-800 placeholder:text-bamboo-400
                         outline-none
+                        focus:border-accent focus:ring-1 focus:ring-accent/20
+                        hover:border-bamboo-200
+                        transition-colors
                       "
                     />
                     <select
