@@ -14,18 +14,11 @@ import asyncio
 from agents.middle import (
     DEPARTMENT_NAME_MAP,
     BaseMiddleLeader,
-    MiddleLeaderConfig,
-    MARKET_LEADER_CONFIG,
-    COMPETITOR_LEADER_CONFIG,
-    PRODUCT_LEADER_CONFIG,
-    FUTURE_LEADER_CONFIG,
-    CHANGE_LEADER_CONFIG,
 )
 from llm.base import BaseLLMProvider
 from prompts.templates import (
     build_top_agent_prompt,
     build_ceo_summary_prompt,
-    build_generic_department_prompt,
 )
 from schemas import (
     DepartmentState,
@@ -43,39 +36,6 @@ from utils.logger import (
     log_skip,
 )
 from utils.progress import ProgressTracker
-
-
-# =============================================================================
-# 已知部门 → Config 映射（Top 选预置部门时用）
-# =============================================================================
-
-KNOWN_CONFIG_MAP: dict[str, MiddleLeaderConfig] = {
-    "market_research": MARKET_LEADER_CONFIG,
-    "competitor_analysis": COMPETITOR_LEADER_CONFIG,
-    "product_design": PRODUCT_LEADER_CONFIG,
-    "future_direction": FUTURE_LEADER_CONFIG,
-    "change_plan": CHANGE_LEADER_CONFIG,
-}
-
-
-def _get_or_create_config(task: DepartmentTask) -> MiddleLeaderConfig:
-    """根据 DepartmentTask 获取 MiddleLeaderConfig。
-
-    预置部门 → 用预置 config；自创部门 → 动态创建 config（通用 prompt）。
-    """
-    cfg = KNOWN_CONFIG_MAP.get(task.agent_type)
-    if cfg is not None:
-        return cfg
-
-    # 自创部门：动态创建 config
-    display_name = task.display_name or task.agent_type
-    return MiddleLeaderConfig(
-        dept_key=task.agent_type,
-        display_name=display_name,
-        sub_id_prefix=task.agent_type.replace("_", "")[:20],
-        state_cls=DepartmentState,
-        prompt_builder=build_generic_department_prompt,
-    )
 
 
 # =============================================================================
@@ -196,12 +156,13 @@ async def node_execute_departments(
         """执行一个部门，异常内部化。"""
         dept_key = task.agent_type
         try:
-            cfg = _get_or_create_config(task)
+            display_name = task.display_name or DEPARTMENT_NAME_MAP.get(dept_key, dept_key)
             leader = BaseMiddleLeader(
                 llm=llm,
                 search_provider=search_provider,
                 tracker=tracker,
-                config=cfg,
+                dept_key=dept_key,
+                display_name=display_name,
             )
             result = await leader.run(
                 project_summary=state.project.description,
@@ -226,7 +187,6 @@ async def node_execute_departments(
             dept_name = DEPARTMENT_NAME_MAP.get(dept_key, dept_key)
             department_results[dept_key] = DepartmentState(
                 summary=f"执行失败: {error[:200]}",
-                status=__import__('schemas').AgentStatus.UNCERTAIN,
             )
 
     log_budget(llm.call_count, state.max_api_calls)
