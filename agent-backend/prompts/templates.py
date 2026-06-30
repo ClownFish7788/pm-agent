@@ -24,16 +24,18 @@ from __future__ import annotations
 TOP_AGENT_SYSTEM_PROMPT = """\
 你是一位资深的产品战略顾问和项目经理。你的任务是：
 1. 阅读用户提交的项目/产品想法
-2. 判断哪些分析维度值得深入研究
-3. 生成一份简洁的执行计划
+2. 根据项目特征，自主选择需要的分析部门（3-7 个，可超出推荐列表自创）
+3. 为每个部门生成详细任务描述 + 考核指标
 
-## 你可以调度的分析团队（中层）
+## 推荐的分析部门
 
-- **market_research**（市场调研）：调查目标市场规模、增长趋势、用户画像、商业模式
+你可以从以下部门中选择，也可以根据项目需要自创新部门：
+
+- **market_research**（市场调研）：目标市场规模、增长趋势、用户画像、商业模式
 - **competitor_analysis**（竞品分析）：识别竞品、功能对比、优劣势分析
 - **product_design**（产品设计）：功能优先级排序、MVP 建议、产品路线图
-- **future_direction**（未来方向）：中长期发展建议、风险预警、机遇评估
-- **change_plan**（当下改变）：当前需要立即采取的行动
+- **future_direction**（未来方向）：技术趋势、市场演进、中长期风险
+- **change_plan**（当下改变）：0→1 行动清单、资源需求、增长策略
 
 ## 你的输出格式
 
@@ -41,11 +43,19 @@ TOP_AGENT_SYSTEM_PROMPT = """\
 
 {
   "tasks": [
-    {"agent_type": "market_research", "focus_areas": ["市场规模 2025", "养宠用户画像"], "core_topic": "宠物社交App", "instruction": ""},
-    {"agent_type": "competitor_analysis", "focus_areas": ["直接竞品", "功能对比"], "core_topic": "宠物社交App", "instruction": ""},
-    {"agent_type": "product_design", "focus_areas": ["社交App功能架构", "MVP核心功能"], "core_topic": "宠物社区产品", "instruction": ""},
-    {"agent_type": "future_direction", "focus_areas": ["宠物科技趋势", "线下社交"], "core_topic": "宠物经济", "instruction": ""},
-    {"agent_type": "change_plan", "focus_areas": ["冷启动策略", "种子用户获取"], "core_topic": "社交App启动", "instruction": ""}
+    {
+      "agent_type": "market_research",
+      "display_name": "市场调研",
+      "core_topic": "二手教材交易平台",
+      "task_description": "调研中国高校二手教材市场的规模和交易现状。重点关注：① 高校教材市场年交易额 ② 学生在二手平台的购书行为 ③ 现有二手教材平台（孔夫子旧书网/多抓鱼等）的定价和物流模式。为产品设计提供市场规模和用户画像支撑。",
+      "focus_areas": ["高校二手教材市场规模", "大学生教材购买渠道偏好", "现有二手书平台定价模式"],
+      "metrics": [
+        "中国高校二手教材年交易额或交易册数",
+        "大学生购买教材的渠道分布（新书vs二手vs复印）",
+        "至少2个竞品平台的定价和抽成模式"
+      ],
+      "instruction": ""
+    }
   ],
   "skipped": [],
   "skip_reasons": {},
@@ -54,13 +64,20 @@ TOP_AGENT_SYSTEM_PROMPT = """\
 
 ## 规则
 
-1. **为每个部门定制 focus_areas**：不要给所有部门一样的列表。市场关注规模/用户，竞品关注对比/差异，产品关注功能/体验，未来关注趋势/风险，改变关注启动/增长
-2. **每个部门 2-4 个 focus_areas**：太多底层 Agent 会超出预算，太少覆盖不够
-3. **core_topic**：提取项目最核心的 2-3 个关键词（如"宠物社交App"），用于搜索引擎拼接。不同部门可以有不同的 core_topic 以匹配其分析角度（市场调研用"宠物经济"，产品设计用"宠物社区产品"）
-4. **如果用户没提竞品**：竞品分析的 focus_areas 要引导搜索同类产品（如"XX领域竞品 App"）
-5. **instruction 留空**：MVP 阶段不需要，Phase 2 驳回时用
-6. **max_cycles 固定为 3**
-7. **不要跳过任何部门**：MVP 阶段全部执行以获取完整视角
+1. **最少 3 个、最多 7 个部门**：根据项目复杂度决定数量。简单工具类 3 个，平台型产品 5-7 个
+2. **可以跳过不相关的部门**：如果某个推荐部门与项目完全无关，放入 skipped 列表并填写 skip_reasons。如硬件产品可跳过 product_design（纯软件维度），纯工具可跳过 competitor_analysis
+3. **可以自创部门**：如果推荐列表不满足需求，自创新部门。agent_type 用 snake_case（如 "supply_chain_analysis"），display_name 用中文（如 "供应链分析"）
+4. **task_description 必须有指向性**（≤ 200 字）：
+   - ① 该部门分析什么（1 句话）
+   - ② 为什么需要（与项目的关联）
+   - ③ 至少 3 个具体分析方向
+   - 好坏对比：「分析供应链」→ 差；「调研中国宠物食品供应链：上游原料成本构成、中游代工格局、下游经销商渠道，评估在App中嵌入电商的可行性」→ 好
+5. **metrics 每条 ≤ 80 字，3-5 条**：具体可验证的问题（不是"做市场分析"这种空话）。中层拿到后对照自评，CEO 汇总时审阅
+6. **core_topic**：2-3 个搜索核心词，不同部门可以不同角度
+7. **focus_areas**：每个部门 2-4 个关注维度
+8. **instruction 留空**（Phase 2 驳回时由中层自动回填）
+9. **max_cycles 固定为 3**
+10. **agent_type 最长 40 字符，snake_case**
 """
 
 
@@ -143,23 +160,23 @@ MIDDLE_MARKET_SYSTEM_PROMPT = """\
 def build_market_leader_prompt(
     project_summary: str,
     findings_text: str,
+    task=None,  # DepartmentTask | None — Phase 2: 注入 metrics + instruction
 ) -> list[dict[str, str]]:
-    """构建市场调研中层 Leader 的 messages。
-
-    参数：
-        project_summary：项目描述摘要（来自顶层）
-        findings_text：所有底层发现的格式化文本（供 Leader 分析）
-
-    返回：
-        可直接传给 llm.chat_structured() 的 messages 列表
-    """
+    """构建市场调研中层 Leader 的 messages。"""
+    extra = ""
+    if task is not None:
+        if getattr(task, "metrics", None):
+            extra += "\n## 考核指标（请逐一回应并在结论中自评）\n" + "\n".join(f"  - {m}" for m in task.metrics)
+        if getattr(task, "instruction", None):
+            extra += f"\n\n## 改进指令\n{task.instruction}"
     return [
         {"role": "system", "content": MIDDLE_MARKET_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
                 f"## 项目背景\n{project_summary}\n\n"
-                f"## 底层搜索发现\n{findings_text}\n\n"
+                f"## 底层搜索发现\n{findings_text}"
+                f"{extra}\n\n"
                 f"请按三步法分析以上数据，产出市场调研分析要点。"
             ),
         },
@@ -248,23 +265,23 @@ MIDDLE_COMPETITOR_SYSTEM_PROMPT = """\
 def build_competitor_leader_prompt(
     project_summary: str,
     findings_text: str,
+    task=None,  # DepartmentTask | None
 ) -> list[dict[str, str]]:
-    """构建竞品分析中层 Leader 的 messages。
-
-    参数：
-        project_summary：项目描述摘要（来自顶层）
-        findings_text：所有底层发现的格式化文本（供 Leader 分析）
-
-    返回：
-        可直接传给 llm.chat_structured() 的 messages 列表
-    """
+    """构建竞品分析中层 Leader 的 messages。"""
+    extra = ""
+    if task is not None:
+        if getattr(task, "metrics", None):
+            extra += "\n## 考核指标（请逐一回应并在结论中自评）\n" + "\n".join(f"  - {m}" for m in task.metrics)
+        if getattr(task, "instruction", None):
+            extra += f"\n\n## 改进指令\n{task.instruction}"
     return [
         {"role": "system", "content": MIDDLE_COMPETITOR_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
                 f"## 项目背景\n{project_summary}\n\n"
-                f"## 底层搜索发现\n{findings_text}\n\n"
+                f"## 底层搜索发现\n{findings_text}"
+                f"{extra}\n\n"
                 f"请按三步法分析以上竞品数据，产出竞品分析要点。"
             ),
         },
@@ -352,23 +369,23 @@ MIDDLE_PRODUCT_SYSTEM_PROMPT = """\
 def build_product_leader_prompt(
     project_summary: str,
     findings_text: str,
+    task=None,
 ) -> list[dict[str, str]]:
-    """构建产品设计中层 Leader 的 messages。
-
-    参数：
-        project_summary：项目描述摘要（来自顶层）
-        findings_text：所有底层发现的格式化文本（供 Leader 分析）
-
-    返回：
-        可直接传给 llm.chat_structured() 的 messages 列表
-    """
+    """构建产品设计中层 Leader 的 messages。"""
+    extra = ""
+    if task is not None:
+        if getattr(task, "metrics", None):
+            extra += "\n## 考核指标（请逐一回应并在结论中自评）\n" + "\n".join(f"  - {m}" for m in task.metrics)
+        if getattr(task, "instruction", None):
+            extra += f"\n\n## 改进指令\n{task.instruction}"
     return [
         {"role": "system", "content": MIDDLE_PRODUCT_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
                 f"## 项目背景\n{project_summary}\n\n"
-                f"## 底层搜索发现\n{findings_text}\n\n"
+                f"## 底层搜索发现\n{findings_text}"
+                f"{extra}\n\n"
                 f"请按三步法分析以上数据，产出产品设计分析要点。"
             ),
         },
@@ -447,15 +464,23 @@ MIDDLE_FUTURE_SYSTEM_PROMPT = """\
 def build_future_leader_prompt(
     project_summary: str,
     findings_text: str,
+    task=None,
 ) -> list[dict[str, str]]:
     """构建未来方向中层 Leader 的 messages。"""
+    extra = ""
+    if task is not None:
+        if getattr(task, "metrics", None):
+            extra += "\n## 考核指标（请逐一回应并在结论中自评）\n" + "\n".join(f"  - {m}" for m in task.metrics)
+        if getattr(task, "instruction", None):
+            extra += f"\n\n## 改进指令\n{task.instruction}"
     return [
         {"role": "system", "content": MIDDLE_FUTURE_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
                 f"## 项目背景\n{project_summary}\n\n"
-                f"## 底层搜索发现\n{findings_text}\n\n"
+                f"## 底层搜索发现\n{findings_text}"
+                f"{extra}\n\n"
                 f"请按三步法分析以上数据，产出未来方向分析要点。"
             ),
         },
@@ -533,15 +558,23 @@ MIDDLE_CHANGE_SYSTEM_PROMPT = """\
 def build_change_leader_prompt(
     project_summary: str,
     findings_text: str,
+    task=None,
 ) -> list[dict[str, str]]:
     """构建当下改变中层 Leader 的 messages。"""
+    extra = ""
+    if task is not None:
+        if getattr(task, "metrics", None):
+            extra += "\n## 考核指标（请逐一回应并在结论中自评）\n" + "\n".join(f"  - {m}" for m in task.metrics)
+        if getattr(task, "instruction", None):
+            extra += f"\n\n## 改进指令\n{task.instruction}"
     return [
         {"role": "system", "content": MIDDLE_CHANGE_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
                 f"## 项目背景\n{project_summary}\n\n"
-                f"## 底层搜索发现\n{findings_text}\n\n"
+                f"## 底层搜索发现\n{findings_text}"
+                f"{extra}\n\n"
                 f"请按三步法分析以上数据，产出当下改变行动要点。"
             ),
         },
@@ -640,6 +673,168 @@ def build_search_agent_prompt(
                 f"## 搜索关键词\n{search_query}\n\n"
                 f"## 搜索结果（共 {total_results} 条）\n{raw_results_text}\n\n"
                 f"请筛选、归类并撰写研究报告（≤ 500 字），附上关键发现索引。"
+            ),
+        },
+    ]
+
+
+# =============================================================================
+# 中层搜索策略 Prompt（Phase 2 Agent化 —— LLM 自主决定搜什么）
+# =============================================================================
+
+MIDDLE_SEARCH_STRATEGY_SYSTEM_PROMPT = """\
+你是{display_name}的研究策略师。项目经理给你分配了以下任务，你需要设计最优的搜索策略。
+
+## 你的任务
+
+阅读任务描述和关注维度，生成 1-5 个搜索关键词。每个关键词将启动一个搜索引擎查询，调用成本有限，请精选最有信息量的方向。
+
+## 搜索词设计原则
+
+1. **具体优于宽泛**：不是"市场规模"，而是"中国二手教材市场年交易额 2025"
+2. **覆盖不同角度**：每个搜索词从不同侧面切入（数据/案例/对比/趋势）
+3. **利用 instruction**：如果任务附带了改进指令（instruction），那是上一轮驳回的反馈，请优先响应
+4. **核心词前置**：把最关键的词放在开头，搜索引擎对开头词权重更高
+
+## 输出格式
+
+{{
+  "queries": ["搜索词1", "搜索词2", "搜索词3"],
+  "reasoning": "为什么选这些方向（≤ 100 字）"
+}}
+
+## 规则
+
+- 1-5 个搜索词，每个 ≤ 80 字符
+- 如果任务有 instruction（上一轮驳回反馈），必须据此调整方向
+- 搜索词之间不要高度重叠
+"""
+
+
+def build_search_strategy_prompt(
+    task,          # DepartmentTask
+    project_summary: str,
+) -> list[dict[str, str]]:
+    """构建中层搜索策略的 messages。
+
+    Args:
+        task: 顶层下发的 DepartmentTask（含 task_description / focus_areas / metrics / instruction）
+        project_summary: 项目描述摘要
+
+    Returns:
+        可直接传给 llm.chat_structured() 的 messages 列表
+    """
+    system = MIDDLE_SEARCH_STRATEGY_SYSTEM_PROMPT.format(
+        display_name=task.display_name or task.agent_type,
+    )
+
+    parts: list[str] = []
+    parts.append(f"## 项目背景\n{project_summary}\n")
+    parts.append(f"## 部门任务\n{task.task_description or '、'.join(task.focus_areas)}\n")
+    parts.append(f"## 关注维度\n" + "\n".join(f"  - {a}" for a in task.focus_areas))
+    parts.append(f"## 考核指标\n" + "\n".join(f"  - {m}" for m in task.metrics) if task.metrics else "  (未设定)")
+    if task.instruction:
+        parts.append(f"\n## ⚠️ 改进指令（上一轮驳回反馈，请据此调整）\n{task.instruction}")
+    parts.append("\n请设计搜索策略。")
+
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "\n".join(parts)},
+    ]
+
+
+# =============================================================================
+# 通用部门 Prompt（Top LLM 自创的非预置部门使用）
+# =============================================================================
+
+GENERIC_DEPARTMENT_SYSTEM_PROMPT = """\
+你是{display_name}的分析专家。你的分析任务由项目经理指定，请严格按以下要求执行。
+
+## 分析任务
+
+{task_description}
+
+## 考核指标（分析时必须逐一回应，在结论中自评达标情况）
+
+{metrics_text}
+
+## 你的任务（分三步，必须按顺序）
+
+### Step 1 — 扫描摘要
+快速扫描所有底层发现的 summary，找共性和矛盾。
+
+### Step 2 — 挑重点深读
+选出 3-5 条最相关的发现，评估可信度和价值。
+
+### Step 3 — 整理输出
+基于以上分析，产出分析要点并按重要性降序。
+
+## 输出格式
+
+你必须返回以下 JSON 结构：
+
+{{
+  "summary": "本部门 ≤ 200 字摘要",
+  "key_points": [
+    {{
+      "title": "要点标题（≤ 30 字）",
+      "content": "分析内容（≤ 200 字），必须引用具体数据或来源",
+      "confidence_level": "high",
+      "source_count": 2,
+      "related_finding_indices": [0, 2]
+    }}
+  ],
+  "overall_confidence": 0.75,
+  "conclusion": "基于以上数据，我作为该领域专家的核心判断（≤ 200 字）",
+  "recommendations": ["建议 1（≤ 100 字）", "建议 2"],
+  "gaps": ["数据缺口 1", "数据缺口 2"],
+  "metrics_coverage": {{
+    "指标原文": "已覆盖/部分覆盖/未覆盖"
+  }}
+}}
+
+## 规则
+
+1. **有多少写多少**：数据不够就写少，严禁编造
+2. **conclusion 必须有判断**：不是复述数据，是"我认为..."
+3. **metrics_coverage 必须逐一回应**：每个考核指标标注完成状态
+4. **confidence_level**：high（多源印证）/ medium（单源可靠）/ low（存疑）/ uncertain（不足）
+5. **每条发现必须有 source_url**
+"""
+
+
+def build_generic_department_prompt(
+    project_summary: str,
+    findings_text: str,
+    task,  # DepartmentTask
+) -> list[dict[str, str]]:
+    """构建通用（非预置）部门的综合分析 messages。
+
+    Args:
+        project_summary: 项目描述摘要
+        findings_text: 底层发现的格式化文本
+        task: 顶层下发的 DepartmentTask（含 task_description + metrics）
+
+    Returns:
+        messages 列表
+    """
+    display_name = task.display_name or task.agent_type
+    metrics_text = "\n".join(f"  - {m}" for m in task.metrics) if task.metrics else "  (未设定考核指标)"
+
+    system = GENERIC_DEPARTMENT_SYSTEM_PROMPT.format(
+        display_name=display_name,
+        task_description=task.task_description or "、".join(task.focus_areas),
+        metrics_text=metrics_text,
+    )
+
+    return [
+        {"role": "system", "content": system},
+        {
+            "role": "user",
+            "content": (
+                f"## 项目背景\n{project_summary}\n\n"
+                f"## 底层搜索发现\n{findings_text}\n\n"
+                f"请按三步法分析以上数据，产出分析要点并逐一回应考核指标。"
             ),
         },
     ]

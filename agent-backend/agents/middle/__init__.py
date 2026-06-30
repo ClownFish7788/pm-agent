@@ -22,23 +22,22 @@ from agents.bottom.search import SearchAgent
 from llm.base import BaseLLMProvider
 from prompts.templates import (
     build_review_prompt,
+    build_search_strategy_prompt,
     build_market_leader_prompt,
     build_competitor_leader_prompt,
     build_product_leader_prompt,
     build_future_leader_prompt,
     build_change_leader_prompt,
+    build_generic_department_prompt,
 )
 from schemas import (
     AgentStatus,
     BottomReport,
-    ChangeState,
-    CompetitorState,
+    DepartmentState,
     DepartmentTask,
-    FutureState,
-    MarketResearchState,
-    ProductDesignState,
     RejectionEntry,
     ReviewResult,
+    SearchStrategy,
     SubAgentReview,
     SubAgentSlot,
 )
@@ -96,7 +95,7 @@ MARKET_LEADER_CONFIG = MiddleLeaderConfig(
     dept_key="market_research",
     display_name="市场调研",
     sub_id_prefix="market_query",
-    state_cls=MarketResearchState,
+    state_cls=DepartmentState,
     prompt_builder=build_market_leader_prompt,
 )
 
@@ -104,7 +103,7 @@ COMPETITOR_LEADER_CONFIG = MiddleLeaderConfig(
     dept_key="competitor_analysis",
     display_name="竞品分析",
     sub_id_prefix="competitor_query",
-    state_cls=CompetitorState,
+    state_cls=DepartmentState,
     prompt_builder=build_competitor_leader_prompt,
 )
 
@@ -112,7 +111,7 @@ PRODUCT_LEADER_CONFIG = MiddleLeaderConfig(
     dept_key="product_design",
     display_name="产品设计",
     sub_id_prefix="product_query",
-    state_cls=ProductDesignState,
+    state_cls=DepartmentState,
     prompt_builder=build_product_leader_prompt,
 )
 
@@ -120,7 +119,7 @@ FUTURE_LEADER_CONFIG = MiddleLeaderConfig(
     dept_key="future_direction",
     display_name="未来方向",
     sub_id_prefix="future_query",
-    state_cls=FutureState,
+    state_cls=DepartmentState,
     prompt_builder=build_future_leader_prompt,
 )
 
@@ -128,7 +127,7 @@ CHANGE_LEADER_CONFIG = MiddleLeaderConfig(
     dept_key="change_plan",
     display_name="当下改变",
     sub_id_prefix="change_query",
-    state_cls=ChangeState,
+    state_cls=DepartmentState,
     prompt_builder=build_change_leader_prompt,
 )
 
@@ -220,8 +219,8 @@ class BaseMiddleLeader:
         """
         cfg = self.config
 
-        # ---- 步骤 1：生成搜索关键词 ----
-        search_queries = self._generate_search_queries(task, project_summary)
+        # ---- 步骤 1：LLM 生成搜索关键词 ----
+        search_queries = await self._generate_search_queries(task, project_summary)
         print(f"  [{cfg.display_name}] 准备搜索 {len(search_queries)} 个方向:")
         for i, q in enumerate(search_queries, 1):
             print(f"      {i}. {q}")
@@ -240,15 +239,16 @@ class BaseMiddleLeader:
             )
 
         # ---- 步骤 3：审核 + 驳回循环（最多 3 轮） ----
-        cycle_count = await self._run_review_loop(sub_slots, project_summary)
+        cycle_count = await self._run_review_loop(sub_slots, project_summary, task=task)
 
         # ---- 步骤 4：汇总底层发现 → 格式化文本 ----
         findings_text = self._format_all_findings(sub_slots)
 
-        # ---- 步骤 5：调 LLM 综合分析 ----
+        # ---- 步骤 5：调 LLM 综合分析（传入 task 以注入 metrics/instruction） ----
         messages = cfg.prompt_builder(
             project_summary=project_summary,
             findings_text=findings_text,
+            task=task,
         )
 
         try:
@@ -310,11 +310,16 @@ class BaseMiddleLeader:
         self,
         sub_slots: dict[str, SubAgentSlot],
         project_summary: str,
+        task: DepartmentTask | None = None,
     ) -> int:
-        """审核 + 驳回循环（最多 3 轮），返回实际执行轮数。"""
+        """审核 + 驳回循环（最多 3 轮），返回实际执行轮数。
+
+        驳回时将原因摘要回写到 task.instruction，供下一轮 _generate_search_queries 使用。
+        """
         cfg = self.config
         max_cycles = 3
         cycle_count = 0
+        rejection_reasons: list[str] = []  # 本轮驳回原因收集
 
         for cycle in range(1, max_cycles + 1):
             cycle_count = cycle
@@ -372,6 +377,7 @@ class BaseMiddleLeader:
                           f"(overall={review.overall_score:.1f}, cred={review.credibility:.1f})")
                 else:
                     all_passed = False
+                    rejection_reasons.append(review.reason)
                     slot.rejection_log.append(RejectionEntry(
                         round=cycle,
                         reason=review.reason,
@@ -408,6 +414,13 @@ class BaseMiddleLeader:
         for slot in sub_slots.values():
             if slot.status == AgentStatus.REJECTED:
                 slot.status = AgentStatus.UNCERTAIN
+
+        # 驳回反馈回写：task.instruction 供下一轮 _generate_search_queries 读取
+        if rejection_reasons and task is not None:
+            summary = "; ".join(rejection_reasons[:3])
+            task.instruction = (
+                f"上一轮搜索存在以下问题，请调整搜索策略：{summary}"
+            )
 
         return cycle_count
 
@@ -515,12 +528,32 @@ class BaseMiddleLeader:
     # 搜索词生成
     # ------------------------------------------------------------------
 
-    def _generate_search_queries(
+    async def _generate_search_queries(
         self, task: DepartmentTask, project_summary: str = ""
     ) -> list[str]:
-        """根据 Top Agent 下发的 core_topic + focus_areas 生成搜索关键词。"""
-        queries: list[str] = []
+        """根据 DepartmentTask 生成搜索关键词 —— LLM 自主决定（带字符串拼接兜底）。
 
+        Phase 2 Agent化：调 LLM 输出 SearchStrategy，失败时 fallback 到
+        原有的 core_topic + focus_areas 拼接逻辑。
+        """
+        cfg = self.config
+
+        try:
+            messages = build_search_strategy_prompt(task, project_summary)
+            strategy: SearchStrategy = await self.llm.chat_structured(
+                messages=messages,
+                output_schema=SearchStrategy,
+                max_tokens=1024,
+            )
+            if strategy.queries:
+                print(f"  [{cfg.display_name}] LLM 搜索策略: {strategy.reasoning}")
+                return strategy.queries
+        except Exception as e:
+            log_error(cfg.display_name, f"搜索策略 LLM 调用失败: {type(e).__name__}: {e}，"
+                      f"fallback 到字符串拼接")
+
+        # ---- Fallback: 原有拼接逻辑 ----
+        queries: list[str] = []
         if task.core_topic:
             core_topic = task.core_topic
         elif project_summary:

@@ -112,8 +112,6 @@ except Exception as e:
     print(f"[dotenv] .env 加载失败: {e}")
 
 # ---- 项目内 import ----
-from agents.middle.market import MarketLeader
-from agents.top import TopAgent
 from dag.graph import build_graph as _build_graph
 from llm.deepseek import DeepSeekProvider
 from schemas import GlobalState, ProjectInfo

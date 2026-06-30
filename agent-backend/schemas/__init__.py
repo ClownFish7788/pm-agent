@@ -56,17 +56,25 @@ class AgentStatus(str, Enum):
     IDLE = "idle"              # 尚未被调度
 
 
-class MiddleAgentType(str, Enum):
-    """中层 Agent 的类型标识。
+# =============================================================================
+# 已知部门类型常量（发给 Top LLM 做推荐选项，Top 可自主增减）
+# =============================================================================
 
-    顶层 Agent 在执行计划中通过这个枚举指定「谁来跑」。
-    MVP 阶段只接一个 MarketResearch，其余预留。
-    """
-    MARKET_RESEARCH = "market_research"       # 市场调研
-    COMPETITOR_ANALYSIS = "competitor_analysis"  # 竞品分析【预留】
-    PRODUCT_DESIGN = "product_design"         # 产品设计【预留】
-    FUTURE_DIRECTION = "future_direction"     # 未来方向【预留】
-    CHANGE_PLAN = "change_plan"               # 当下改变【预留】
+KNOWN_DEPARTMENT_TYPES: list[str] = [
+    "market_research",        # 市场调研
+    "competitor_analysis",    # 竞品分析
+    "product_design",         # 产品设计
+    "future_direction",       # 未来方向
+    "change_plan",            # 当下改变
+]
+
+KNOWN_DEPARTMENT_NAMES: dict[str, str] = {
+    "market_research": "市场调研",
+    "competitor_analysis": "竞品分析",
+    "product_design": "产品设计",
+    "future_direction": "未来方向",
+    "change_plan": "当下改变",
+}
 
 
 class SourceType(str, Enum):
@@ -132,24 +140,41 @@ class Message(BaseModel):
 class DepartmentTask(BaseModel):
     """顶层 Agent 给一个中层部门下达的专属任务。
 
-    每个部门收到自己的 DepartmentTask，不再共用全局 focus_areas。
-    Phase 2 时 instruction 字段用于驳回后的重做指令。
+    Top LLM 为每个部门生成完整的任务描述 + 考核指标 + 搜索主题。
     """
-    agent_type: MiddleAgentType = Field(
-        description="目标中层部门类型，如 MARKET_RESEARCH"
+
+    agent_type: str = Field(
+        description="部门类型标识。预置值见 KNOWN_DEPARTMENT_TYPES，"
+                    "Top LLM 可自创（如 'supply_chain_analysis'），最长 40 字符"
+    )
+    display_name: str = Field(
+        default="",
+        description="部门中文名，如 '市场调研'、'供应链分析'。Top LLM 自创部门时必须填写"
+    )
+    task_description: str = Field(
+        default="",
+        description="该部门的详细任务描述（≤ 200 字）。必须包含："
+                    "① 分析什么 ② 为什么需要 ③ 至少 3 个具体分析方向。"
+                    "中层拿到这个就能直接生成搜索策略"
     )
     focus_areas: list[str] = Field(
         default_factory=list,
-        description="该部门专属的关注维度，如 ['宠物社交市场规模', '养宠用户画像']"
+        description="该部门专属的关注维度，如 ['二手教材市场规模', '大学生购书渠道偏好']"
+    )
+    metrics: list[str] = Field(
+        default_factory=list,
+        description="Top 设定的考核指标（3-5 条），每条 ≤ 80 字。"
+                    "中层分析时对照自评，CEO 汇总时审阅完成度。"
+                    "如 '二手教材年交易额（中国高校）'、'学生购书渠道偏好数据'"
     )
     instruction: str = Field(
         default="",
-        description="特别指令（Phase 2 驳回时用，如'上次竞品分析漏了某某，这次重点看'）"
+        description="特别指令。Phase 2 驳回时由中层回写改进方向，"
+                    "下一轮搜索时 LLM 读取以调整策略"
     )
     core_topic: str = Field(
         default="",
-        description="项目核心关键词（2-3个词），如'宠物社交App'，供中层拼接搜索词；"
-                    "由 Top Agent LLM 提取，避免硬截断 project_summary[:10] 腰斩语义"
+        description="搜索核心关键词（2-3 个词），如 '二手教材交易平台'，供搜索引擎拼接"
     )
 
 
@@ -167,13 +192,13 @@ class ExecutionPlan(BaseModel):
         default_factory=list,
         description="需要执行的中层任务列表，每个任务专属一个部门"
     )
-    skipped: list[MiddleAgentType] = Field(
+    skipped: list[str] = Field(
         default_factory=list,
-        description="被跳过的中层部门列表"
+        description="被跳过的部门类型标识列表，如 ['competitor_analysis']"
     )
     skip_reasons: dict[str, str] = Field(
         default_factory=dict,
-        description="跳过原因，key = MiddleAgentType.value"
+        description="跳过原因，key = 部门类型标识"
     )
     max_cycles: int = Field(
         default=3,
@@ -377,26 +402,24 @@ class AnalysisPoint(BaseModel):
     )
 
 
-class MarketResearchState(BaseModel):
-    """中层「市场调研」Leader 的完整状态。
+class DepartmentState(BaseModel):
+    """单个中层部门的完整状态 —— 预置和自定义部门共用。
 
     分两层设计：
     - Public 字段（顶层可读）：summary、key_points、overall_confidence、status
     - Internal 字段（中层自己用）：项目信息、子 Agent 槽位、循环计数
 
-    顶层 Leader 汇总时只需要读 key_points，不需要知道底层细节。
-    这样修改中层内部逻辑时不会影响顶层。
-
-    MVP 阶段 key_points 限制 ≤ 5 条（后续扩展到 8 条）。
+    设计要点：顶层 Leader 汇总时只需要读 key_points，不需要知道底层细节。
     """
-    # ===== Public 接口（顶层 Agent 只读这三个 + status） =====
+
+    # ===== Public 接口（CEO 汇总读取） =====
     summary: str | None = Field(
         default=None,
-        description="本部门 ≤ 200 字摘要，供顶层快速了解结论"
+        description="本部门 ≤ 200 字摘要"
     )
     key_points: list[AnalysisPoint] = Field(
         default_factory=list,
-        description="≤ 8 条分析要点（MVP 阶段 ≤ 5 条），按重要性降序"
+        description="≤ 8 条分析要点，按重要性降序"
     )
     overall_confidence: float = Field(
         default=0.0, ge=0.0, le=1.0,
@@ -417,6 +440,11 @@ class MarketResearchState(BaseModel):
         default_factory=list,
         description="本部门数据缺口（≤ 3 条），明确标注哪些维度数据不足"
     )
+    metrics_coverage: dict[str, str] = Field(
+        default_factory=dict,
+        description="Top 设定的考核指标完成情况。key=指标原文，value=完成状态"
+                    "（'已覆盖'/'部分覆盖'/'未覆盖'）"
+    )
 
     # ===== 控制状态 =====
     status: AgentStatus = Field(default=AgentStatus.IDLE, description="本部门当前状态")
@@ -426,74 +454,10 @@ class MarketResearchState(BaseModel):
     focus_direction: str = Field(default="", description="本中层关注的细分方向")
     sub_agents: dict[str, SubAgentSlot] = Field(
         default_factory=dict,
-        description="底层子 Agent 管理槽。key='market_size'/'user_profile'/'business_model' 等"
+        description="底层子 Agent 管理槽。key 如 'market_size' / 'user_profile'"
     )
-    cycle_count: int = Field(default=0, description="本部门整体循环/驳回次数，MVP 固定为 0")
-
-
-# =============================================================================
-# 其余中层 State（MVP —— 预留壳子，Phase 2 填充）
-# =============================================================================
-
-
-class CompetitorState(BaseModel):
-    """竞品分析中层 State。"""
-    summary: str | None = None
-    key_points: list[AnalysisPoint] = Field(default_factory=list)
-    overall_confidence: float = 0.0
-    status: AgentStatus = AgentStatus.IDLE
-    conclusion: str = Field(default="", description="部门结论（≤ 200 字）")
-    recommendations: list[str] = Field(default_factory=list, description="部门建议（≤ 3 条）")
-    gaps: list[str] = Field(default_factory=list, description="数据缺口（≤ 3 条）")
-    project: dict = Field(default_factory=dict)
-    focus_direction: str = Field(default="", description="本中层关注的细分方向")
-    sub_agents: dict[str, SubAgentSlot] = Field(default_factory=dict)
-    cycle_count: int = 0
-
-
-class ProductDesignState(BaseModel):
-    """产品设计中层 State。"""
-    summary: str | None = None
-    key_points: list[AnalysisPoint] = Field(default_factory=list)
-    overall_confidence: float = 0.0
-    status: AgentStatus = AgentStatus.IDLE
-    conclusion: str = Field(default="", description="部门结论（≤ 200 字）")
-    recommendations: list[str] = Field(default_factory=list, description="部门建议（≤ 3 条）")
-    gaps: list[str] = Field(default_factory=list, description="数据缺口（≤ 3 条）")
-    project: dict = Field(default_factory=dict)
-    focus_direction: str = Field(default="", description="本中层关注的细分方向")
-    sub_agents: dict[str, SubAgentSlot] = Field(default_factory=dict)
-    cycle_count: int = 0
-
-
-class FutureState(BaseModel):
-    """未来方向中层 State。"""
-    summary: str | None = None
-    key_points: list[AnalysisPoint] = Field(default_factory=list)
-    overall_confidence: float = 0.0
-    status: AgentStatus = AgentStatus.IDLE
-    conclusion: str = Field(default="", description="部门结论（≤ 200 字）")
-    recommendations: list[str] = Field(default_factory=list, description="部门建议（≤ 3 条）")
-    gaps: list[str] = Field(default_factory=list, description="数据缺口（≤ 3 条）")
-    project: dict = Field(default_factory=dict)
-    focus_direction: str = Field(default="", description="本中层关注的细分方向")
-    sub_agents: dict[str, SubAgentSlot] = Field(default_factory=dict)
-    cycle_count: int = 0
-
-
-class ChangeState(BaseModel):
-    """当下改变中层 State。"""
-    summary: str | None = None
-    key_points: list[AnalysisPoint] = Field(default_factory=list)
-    overall_confidence: float = 0.0
-    status: AgentStatus = AgentStatus.IDLE
-    conclusion: str = Field(default="", description="部门结论（≤ 200 字）")
-    recommendations: list[str] = Field(default_factory=list, description="部门建议（≤ 3 条）")
-    gaps: list[str] = Field(default_factory=list, description="数据缺口（≤ 3 条）")
-    project: dict = Field(default_factory=dict)
-    focus_direction: str = Field(default="", description="本中层关注的细分方向")
-    sub_agents: dict[str, SubAgentSlot] = Field(default_factory=dict)
-    cycle_count: int = 0
+    cycle_count: int = Field(default=0, description="本部门整体循环/驳回次数")
+    department_type: str = Field(default="", description="部门类型标识（如 'market_research'）")
 
 
 # =============================================================================
@@ -506,7 +470,7 @@ class GlobalState(BaseModel):
 
     设计原则（来自 CLAUDE.md）：
     1. 全局 State 只做「路由索引」—— 顶层不关心中层内部细节
-    2. 每个中层有独立子 State —— 字段名不冲突，修改中层不影响其他中层
+    2. department_results 以 dict 管理所有部门结果 —— key = department_type，增删灵活
     3. 顶层读中层时只看 .summary / .key_points / .overall_confidence / .status
     4. 驳回不存历史数据，只存最新一轮输出 + 驳回原因链
 
@@ -515,6 +479,7 @@ class GlobalState(BaseModel):
     - current_phase：当前执行阶段，用于 SSE 推送进度
     - errors：收集非致命错误，最后汇入报告
     """
+
     # ===== 用户输入 =====
     project: ProjectInfo = Field(default_factory=ProjectInfo, description="用户的项目信息")
     conversation_history: list[Message] = Field(
@@ -526,31 +491,18 @@ class GlobalState(BaseModel):
         default=None, description="顶层 Agent 生成的执行计划（决定谁跑、谁跳过）"
     )
 
-    # ===== 中层结果（顶层只读 Public 字段） =====
-    market_research: MarketResearchState | None = Field(
-        default=None, description="市场调研结果"
-    )
-    competitor_analysis: CompetitorState | None = Field(
-        default=None, description="竞品分析结果【预留】"
-    )
-    product_design: ProductDesignState | None = Field(
-        default=None, description="产品设计结果【预留】"
-    )
-    future_direction: FutureState | None = Field(
-        default=None, description="未来方向结果【预留】"
-    )
-    change_plan: ChangeState | None = Field(
-        default=None, description="当下改变结果【预留】"
+    # ===== 中层结果 —— dict 管理，key = department_type，增删部门灵活 =====
+    department_results: dict[str, DepartmentState] = Field(
+        default_factory=dict,
+        description="所有中层部门的执行结果。key='market_research' 等，value=DepartmentState"
     )
 
     # ===== 全局控制 =====
-    # total_api_calls 用 max reducer：并行节点都写绝对值，取最新值即可
     total_api_calls: Annotated[int, _max_reducer] = Field(
         default=0, description="已消耗的 LLM API 调用次数"
     )
     max_api_calls: int = Field(default=30, description="LLM 调用硬上限（熔断器）")
     current_phase: str = Field(default="init", description="当前执行阶段标识")
-    # errors 用 add reducer：并行节点各自追加错误，不会被覆盖
     errors: Annotated[list[str], _op_add] = Field(
         default_factory=list, description="非致命错误收集"
     )
@@ -651,6 +603,24 @@ class FinalReport(BaseModel):
 # =============================================================================
 # 搜索相关的数据类型
 # =============================================================================
+
+
+class SearchStrategy(BaseModel):
+    """中层 LLM 自主生成的搜索策略 —— 替代硬编码字符串拼接。
+
+    中层 Leader 收到 DepartmentTask 后，调 LLM 输出此 schema，
+    决定：搜索什么、搜几个方向、为什么。
+    """
+
+    queries: list[str] = Field(
+        default_factory=list,
+        min_items=1, max_items=5,
+        description="搜索关键词列表（1-5 个），按优先级降序。每个词 ≤ 80 字符"
+    )
+    reasoning: str = Field(
+        default="",
+        description="选这些搜索方向的原因（≤ 100 字），供中层 Leader 理解搜索意图"
+    )
 
 
 class SearchOptions(BaseModel):
