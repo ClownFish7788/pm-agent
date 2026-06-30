@@ -9,7 +9,6 @@
 
 import type { AnalysisState, DepartmentState, SubAgentSlot } from "@/types/analysis";
 import type { SSEEvent } from "@/types/schemas";
-import { DEPARTMENT_LABELS } from "@/types/schemas";
 
 // =============================================================================
 // 初始状态
@@ -20,7 +19,7 @@ export const INITIAL_STATE: AnalysisState = {
   plan: null,
   departments: {},
   callCount: 0,
-  maxCalls: 30,
+  maxCalls: 60,
   finalReport: null,
   errors: [],
 };
@@ -41,11 +40,10 @@ export function analysisReducer(
       const { tasks, skipped } = event.data;
       const departments: Record<string, DepartmentState> = {};
 
-      for (const [key, focusAreas] of Object.entries(tasks)) {
-        const deptKey = key as keyof typeof DEPARTMENT_LABELS;
+      for (const [key, taskInfo] of Object.entries(tasks)) {
         departments[key] = {
-          label: DEPARTMENT_LABELS[deptKey] ?? key,
-          focusAreas: focusAreas as string[],
+          label: taskInfo.display_name || key,
+          focusAreas: taskInfo.focus_areas,
           status: (skipped as string[] | undefined)?.includes(key)
             ? "skipped"
             : "pending",
@@ -63,10 +61,11 @@ export function analysisReducer(
         plan: {
           taskCount: event.data.task_count,
           skippedCount: event.data.skipped_count,
-          tasks: Object.entries(tasks).map(([key, areas]) => ({
+          tasks: Object.entries(tasks).map(([key, taskInfo]) => ({
             department: key,
-            label: DEPARTMENT_LABELS[key as keyof typeof DEPARTMENT_LABELS] ?? key,
-            focusAreas: areas as string[],
+            label: taskInfo.display_name || key,
+            focusAreas: taskInfo.focus_areas,
+            metrics: taskInfo.metrics,
             status: (skipped as string[] | undefined)?.includes(key)
               ? ("skipped" as const)
               : ("pending" as const),

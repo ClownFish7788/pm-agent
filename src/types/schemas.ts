@@ -24,13 +24,8 @@ export type SSEEventType =
   | "error"
   | "done";
 
-/** 中层部门标识（对应后端 MiddleAgentType） */
-export type MiddleAgentType =
-  | "market_research"
-  | "competitor_analysis"
-  | "product_design"
-  | "future_direction"
-  | "change_plan";
+/** 中层部门标识 —— 后端 Agent化 后不再限定枚举，Top LLM 可自创部门 */
+export type MiddleAgentType = string;
 
 /** Agent 状态（对应后端 AgentStatus） */
 export type AgentStatus =
@@ -72,10 +67,13 @@ export interface AnalyzeRequest {
 // 顶层执行计划
 // =============================================================================
 
-/** 中层部门专属任务（对应后端 DepartmentTask） */
+/** 中层部门专属任务（对应后端 DepartmentTask — Agent化后扩展） */
 export interface DepartmentTask {
-  agent_type: MiddleAgentType;
+  agent_type: string;
+  display_name: string;
+  task_description: string;
   focus_areas: string[];
+  metrics: string[];
   instruction: string;
   core_topic: string;
 }
@@ -83,7 +81,7 @@ export interface DepartmentTask {
 /** 执行计划（对应后端 ExecutionPlan） */
 export interface ExecutionPlan {
   tasks: DepartmentTask[];
-  skipped: MiddleAgentType[];
+  skipped: string[];
   skip_reasons: Record<string, string>;
   max_cycles: number;
 }
@@ -147,7 +145,7 @@ export interface AnalysisPoint {
 // 部门中文映射
 // =============================================================================
 
-export const DEPARTMENT_LABELS: Record<MiddleAgentType, string> = {
+export const DEPARTMENT_LABELS: Record<string, string> = {
   market_research: "市场调研",
   competitor_analysis: "竞品分析",
   product_design: "产品设计",
@@ -210,8 +208,8 @@ export interface PlanGeneratedEvent {
   data: {
     task_count: number;
     skipped_count: number;
-    /** key = agent_type, value = focus_areas (后端以 dict 而非数组发送) */
-    tasks: Record<string, string[]>;
+    /** key = agent_type, value = { display_name, focus_areas, metrics } (Agent化后扩展) */
+    tasks: Record<string, { display_name: string; focus_areas: string[]; metrics: string[] }>;
     skipped: string[];
   };
   call_count: number;

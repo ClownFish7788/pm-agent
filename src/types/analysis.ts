@@ -46,6 +46,7 @@ export interface DispatchedTask {
   department: string;
   label: string;
   focusAreas: string[];
+  metrics: string[];
   status: "pending" | "running" | "completed" | "skipped";
 }
 

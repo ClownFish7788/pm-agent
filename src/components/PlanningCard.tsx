@@ -83,6 +83,16 @@ export default function PlanningCard({ taskCount, skippedCount, tasks }: Plannin
               {task.focusAreas.join("、")}
             </span>
 
+            {/* 考核指标数 */}
+            {task.metrics && task.metrics.length > 0 && (
+              <span
+                className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-accent-subtle text-accent font-medium"
+                title={task.metrics.join("\n")}
+              >
+                {task.metrics.length} 指标
+              </span>
+            )}
+
             {/* 状态标签 */}
             <span
               className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full font-medium ${
