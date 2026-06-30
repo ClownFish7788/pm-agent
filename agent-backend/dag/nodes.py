@@ -20,12 +20,15 @@ MVP 节点：
 
 from __future__ import annotations
 
-from agents.middle import DEPARTMENT_NAME_MAP
-from agents.middle.market import MarketLeader
-from agents.middle.competitor import CompetitorLeader
-from agents.middle.product import ProductLeader
-from agents.middle.future import FutureLeader
-from agents.middle.change import ChangeLeader
+from agents.middle import (
+    DEPARTMENT_NAME_MAP,
+    BaseMiddleLeader,
+    MARKET_LEADER_CONFIG,
+    COMPETITOR_LEADER_CONFIG,
+    PRODUCT_LEADER_CONFIG,
+    FUTURE_LEADER_CONFIG,
+    CHANGE_LEADER_CONFIG,
+)
 from llm.base import BaseLLMProvider
 from prompts.templates import build_top_agent_prompt, build_ceo_summary_prompt
 from schemas import (
@@ -213,7 +216,7 @@ async def node_market_research(
     if tracker is not None:
         tracker.department_start(dept="market_research", focus_areas=task.focus_areas, call_count=llm.call_count)
 
-    market_leader = MarketLeader(llm=llm, search_provider=search_provider, tracker=tracker)
+    market_leader = BaseMiddleLeader(llm=llm, search_provider=search_provider, tracker=tracker, config=MARKET_LEADER_CONFIG)
 
     market_state: MarketResearchState = await market_leader.run(
         project_summary=project_summary,
@@ -275,7 +278,7 @@ async def node_competitor_analysis(
     if tracker is not None:
         tracker.department_start(dept="competitor_analysis", focus_areas=task.focus_areas, call_count=llm.call_count)
 
-    competitor_leader = CompetitorLeader(llm=llm, search_provider=search_provider, tracker=tracker)
+    competitor_leader = BaseMiddleLeader(llm=llm, search_provider=search_provider, tracker=tracker, config=COMPETITOR_LEADER_CONFIG)
 
     competitor_state = await competitor_leader.run(
         project_summary=project_summary,
@@ -327,7 +330,7 @@ async def node_product_design(
     if tracker is not None:
         tracker.department_start(dept="product_design", focus_areas=task.focus_areas, call_count=llm.call_count)
 
-    product_leader = ProductLeader(llm=llm, search_provider=search_provider, tracker=tracker)
+    product_leader = BaseMiddleLeader(llm=llm, search_provider=search_provider, tracker=tracker, config=PRODUCT_LEADER_CONFIG)
 
     product_state = await product_leader.run(
         project_summary=project_summary,
@@ -364,7 +367,7 @@ async def node_future_direction(
     if tracker is not None:
         tracker.department_start(dept="future_direction", focus_areas=task.focus_areas, call_count=llm.call_count)
 
-    future_leader = FutureLeader(llm=llm, search_provider=search_provider, tracker=tracker)
+    future_leader = BaseMiddleLeader(llm=llm, search_provider=search_provider, tracker=tracker, config=FUTURE_LEADER_CONFIG)
     future_state = await future_leader.run(
         project_summary=state.project.description,
         task=task,
@@ -399,7 +402,7 @@ async def node_change_plan(
     if tracker is not None:
         tracker.department_start(dept="change_plan", focus_areas=task.focus_areas, call_count=llm.call_count)
 
-    change_leader = ChangeLeader(llm=llm, search_provider=search_provider, tracker=tracker)
+    change_leader = BaseMiddleLeader(llm=llm, search_provider=search_provider, tracker=tracker, config=CHANGE_LEADER_CONFIG)
     change_state = await change_leader.run(
         project_summary=state.project.description,
         task=task,

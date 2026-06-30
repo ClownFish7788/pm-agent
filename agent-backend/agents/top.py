@@ -24,12 +24,15 @@ MVP 简化：
 
 from __future__ import annotations
 
-from agents.middle import DEPARTMENT_NAME_MAP
-from agents.middle.market import MarketLeader
-from agents.middle.competitor import CompetitorLeader
-from agents.middle.product import ProductLeader
-from agents.middle.future import FutureLeader
-from agents.middle.change import ChangeLeader
+from agents.middle import (
+    DEPARTMENT_NAME_MAP,
+    BaseMiddleLeader,
+    MARKET_LEADER_CONFIG,
+    COMPETITOR_LEADER_CONFIG,
+    PRODUCT_LEADER_CONFIG,
+    FUTURE_LEADER_CONFIG,
+    CHANGE_LEADER_CONFIG,
+)
 from llm.base import BaseLLMProvider
 from prompts.templates import build_top_agent_prompt, build_ceo_summary_prompt
 from schemas import (
@@ -198,35 +201,35 @@ class TopAgent:
         for task in plan.tasks:
             if task.agent_type == MiddleAgentType.MARKET_RESEARCH:
                 state.current_phase = "market_research"
-                market_leader = MarketLeader(llm=self.llm, search_provider=self.search_provider)
+                market_leader = BaseMiddleLeader(llm=self.llm, search_provider=self.search_provider, config=MARKET_LEADER_CONFIG)
                 market_state = await market_leader.run(project_summary=project_summary, task=task)
                 state.market_research = market_state
                 state.total_api_calls = self.llm.call_count
 
             elif task.agent_type == MiddleAgentType.COMPETITOR_ANALYSIS:
                 state.current_phase = "competitor_analysis"
-                competitor_leader = CompetitorLeader(llm=self.llm, search_provider=self.search_provider)
+                competitor_leader = BaseMiddleLeader(llm=self.llm, search_provider=self.search_provider, config=COMPETITOR_LEADER_CONFIG)
                 competitor_state = await competitor_leader.run(project_summary=project_summary, task=task)
                 state.competitor_analysis = competitor_state
                 state.total_api_calls = self.llm.call_count
 
             elif task.agent_type == MiddleAgentType.PRODUCT_DESIGN:
                 state.current_phase = "product_design"
-                product_leader = ProductLeader(llm=self.llm, search_provider=self.search_provider)
+                product_leader = BaseMiddleLeader(llm=self.llm, search_provider=self.search_provider, config=PRODUCT_LEADER_CONFIG)
                 product_state = await product_leader.run(project_summary=project_summary, task=task)
                 state.product_design = product_state
                 state.total_api_calls = self.llm.call_count
 
             elif task.agent_type == MiddleAgentType.FUTURE_DIRECTION:
                 state.current_phase = "future_direction"
-                future_leader = FutureLeader(llm=self.llm, search_provider=self.search_provider)
+                future_leader = BaseMiddleLeader(llm=self.llm, search_provider=self.search_provider, config=FUTURE_LEADER_CONFIG)
                 future_state = await future_leader.run(project_summary=project_summary, task=task)
                 state.future_direction = future_state
                 state.total_api_calls = self.llm.call_count
 
             elif task.agent_type == MiddleAgentType.CHANGE_PLAN:
                 state.current_phase = "change_plan"
-                change_leader = ChangeLeader(llm=self.llm, search_provider=self.search_provider)
+                change_leader = BaseMiddleLeader(llm=self.llm, search_provider=self.search_provider, config=CHANGE_LEADER_CONFIG)
                 change_state = await change_leader.run(project_summary=project_summary, task=task)
                 state.change_plan = change_state
                 state.total_api_calls = self.llm.call_count

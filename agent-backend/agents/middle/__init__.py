@@ -20,11 +20,23 @@ from typing import Callable
 
 from agents.bottom.search import SearchAgent
 from llm.base import BaseLLMProvider
-from prompts.templates import build_review_prompt
+from prompts.templates import (
+    build_review_prompt,
+    build_market_leader_prompt,
+    build_competitor_leader_prompt,
+    build_product_leader_prompt,
+    build_future_leader_prompt,
+    build_change_leader_prompt,
+)
 from schemas import (
     AgentStatus,
     BottomReport,
+    ChangeState,
+    CompetitorState,
     DepartmentTask,
+    FutureState,
+    MarketResearchState,
+    ProductDesignState,
     RejectionEntry,
     ReviewResult,
     SubAgentReview,
@@ -73,6 +85,52 @@ class MiddleLeaderConfig:
         self.sub_id_prefix = sub_id_prefix        # "market_query"
         self.state_cls = state_cls                # MarketResearchState
         self.prompt_builder = prompt_builder      # build_market_leader_prompt()
+
+
+# =============================================================================
+# 5 个部门预置配置（当前由调用的 DAG 节点 / TopAgent 直接使用）
+# 未来 Top Agent 可动态生成 MiddleLeaderConfig 传入 BaseMiddleLeader
+# =============================================================================
+
+MARKET_LEADER_CONFIG = MiddleLeaderConfig(
+    dept_key="market_research",
+    display_name="市场调研",
+    sub_id_prefix="market_query",
+    state_cls=MarketResearchState,
+    prompt_builder=build_market_leader_prompt,
+)
+
+COMPETITOR_LEADER_CONFIG = MiddleLeaderConfig(
+    dept_key="competitor_analysis",
+    display_name="竞品分析",
+    sub_id_prefix="competitor_query",
+    state_cls=CompetitorState,
+    prompt_builder=build_competitor_leader_prompt,
+)
+
+PRODUCT_LEADER_CONFIG = MiddleLeaderConfig(
+    dept_key="product_design",
+    display_name="产品设计",
+    sub_id_prefix="product_query",
+    state_cls=ProductDesignState,
+    prompt_builder=build_product_leader_prompt,
+)
+
+FUTURE_LEADER_CONFIG = MiddleLeaderConfig(
+    dept_key="future_direction",
+    display_name="未来方向",
+    sub_id_prefix="future_query",
+    state_cls=FutureState,
+    prompt_builder=build_future_leader_prompt,
+)
+
+CHANGE_LEADER_CONFIG = MiddleLeaderConfig(
+    dept_key="change_plan",
+    display_name="当下改变",
+    sub_id_prefix="change_query",
+    state_cls=ChangeState,
+    prompt_builder=build_change_leader_prompt,
+)
 
 
 # =============================================================================
@@ -126,18 +184,12 @@ async def _search_one(
 # =============================================================================
 
 class BaseMiddleLeader:
-    """中层 Leader 模板 —— 所有 5 个部门共享同一套 6 步分析流程。
+    """中层 Leader 模板 —— 所有部门共享同一套 6 步分析流程。
 
-    子类只需覆写 `config` 类属性即可获得完整的：
-    - 搜索词生成
-    - 审核+驳回循环（最多 3 轮 → UNCERTAIN）
-    - 底层发现格式化
-    - LLM 综合分析
-    - SSE 事件推送
-    - 日志打印
+    通过构造函数注入 MiddleLeaderConfig，即插即用：
+    - 当前：DAG 节点/ TopAgent 传入预置常量（MARKET_LEADER_CONFIG 等）
+    - 未来：TopAgent LLM 动态生成 config 后直接传入
     """
-
-    config: MiddleLeaderConfig  # 子类必须覆写
 
     def __init__(
         self,
@@ -145,10 +197,12 @@ class BaseMiddleLeader:
         search_provider: BaseSearchProvider,
         *,
         tracker: ProgressTracker | None = None,
+        config: MiddleLeaderConfig,
     ) -> None:
         self.llm = llm
         self.search_provider = search_provider
         self.tracker = tracker
+        self.config = config
 
     # ------------------------------------------------------------------
     # 核心方法：模板 run()
@@ -165,11 +219,10 @@ class BaseMiddleLeader:
             对应部门的 Pydantic State 实例
         """
         cfg = self.config
-        class_name = self.__class__.__name__
 
         # ---- 步骤 1：生成搜索关键词 ----
         search_queries = self._generate_search_queries(task, project_summary)
-        print(f"  [{class_name}] 准备搜索 {len(search_queries)} 个方向:")
+        print(f"  [{cfg.display_name}] 准备搜索 {len(search_queries)} 个方向:")
         for i, q in enumerate(search_queries, 1):
             print(f"      {i}. {q}")
 
@@ -205,7 +258,7 @@ class BaseMiddleLeader:
                 max_tokens=4096,
             )
         except Exception as e:
-            log_error(class_name, f"LLM 综合分析失败: {type(e).__name__}: {e}")
+            log_error(cfg.display_name, f"LLM 综合分析失败: {type(e).__name__}: {e}")
             if self.tracker is not None:
                 self.tracker.error(f"LLM 综合分析失败: {e}", department=cfg.dept_key)
             return self._build_fallback_state(project_summary, task, sub_slots, cycle_count, str(e))
@@ -226,7 +279,7 @@ class BaseMiddleLeader:
 
         # ---- 步骤 7：打印输出 ----
         log_agent_output(
-            agent_name=class_name,
+            agent_name=cfg.display_name,
             agent_emoji="",
             input_summary=f"项目: {project_summary[:100]} | 审核轮次: {cycle_count} | 关注: {task.focus_areas}",
             output={
@@ -260,7 +313,6 @@ class BaseMiddleLeader:
     ) -> int:
         """审核 + 驳回循环（最多 3 轮），返回实际执行轮数。"""
         cfg = self.config
-        class_name = self.__class__.__name__
         max_cycles = 3
         cycle_count = 0
 
@@ -274,7 +326,7 @@ class BaseMiddleLeader:
             if not pending_ids:
                 break
 
-            print(f"  [{class_name}] 第 {cycle}/{max_cycles} 轮审核 — "
+            print(f"  [{cfg.display_name}] 第 {cycle}/{max_cycles} 轮审核 — "
                   f"待执行: {len(pending_ids)} 个子 Agent")
 
             # SSE: 子 Agent 启动
@@ -349,7 +401,7 @@ class BaseMiddleLeader:
                     )
 
             if all_passed:
-                print(f"  [{class_name}] 全部通过审核 ✅")
+                print(f"  [{cfg.display_name}] 全部通过审核")
                 break
 
         # 兜底：标记仍然 REJECTED 的为 UNCERTAIN
@@ -369,7 +421,7 @@ class BaseMiddleLeader:
         project_summary: str,
     ) -> list[SubAgentReview]:
         """调 LLM 审核待审子 Agent 的研究报告。"""
-        class_name = self.__class__.__name__
+        cfg = self.config
 
         sub_slots_info: list[dict] = []
         for sub_id, slot in pending_slots.items():
@@ -399,7 +451,7 @@ class BaseMiddleLeader:
             )
             return result.reviews
         except Exception as e:
-            log_error(f"{class_name}.review", f"审核调用失败: {type(e).__name__}: {e}")
+            log_error(f"{cfg.display_name}.review", f"审核调用失败: {type(e).__name__}: {e}")
             return [
                 SubAgentReview(
                     sub_id=info["sub_id"],
