@@ -446,6 +446,7 @@ class CompetitorState(BaseModel):
     recommendations: list[str] = Field(default_factory=list, description="部门建议（≤ 3 条）")
     gaps: list[str] = Field(default_factory=list, description="数据缺口（≤ 3 条）")
     project: dict = Field(default_factory=dict)
+    focus_direction: str = Field(default="", description="本中层关注的细分方向")
     sub_agents: dict[str, SubAgentSlot] = Field(default_factory=dict)
     cycle_count: int = 0
 
@@ -460,6 +461,7 @@ class ProductDesignState(BaseModel):
     recommendations: list[str] = Field(default_factory=list, description="部门建议（≤ 3 条）")
     gaps: list[str] = Field(default_factory=list, description="数据缺口（≤ 3 条）")
     project: dict = Field(default_factory=dict)
+    focus_direction: str = Field(default="", description="本中层关注的细分方向")
     sub_agents: dict[str, SubAgentSlot] = Field(default_factory=dict)
     cycle_count: int = 0
 
@@ -474,6 +476,7 @@ class FutureState(BaseModel):
     recommendations: list[str] = Field(default_factory=list, description="部门建议（≤ 3 条）")
     gaps: list[str] = Field(default_factory=list, description="数据缺口（≤ 3 条）")
     project: dict = Field(default_factory=dict)
+    focus_direction: str = Field(default="", description="本中层关注的细分方向")
     sub_agents: dict[str, SubAgentSlot] = Field(default_factory=dict)
     cycle_count: int = 0
 
@@ -488,6 +491,7 @@ class ChangeState(BaseModel):
     recommendations: list[str] = Field(default_factory=list, description="部门建议（≤ 3 条）")
     gaps: list[str] = Field(default_factory=list, description="数据缺口（≤ 3 条）")
     project: dict = Field(default_factory=dict)
+    focus_direction: str = Field(default="", description="本中层关注的细分方向")
     sub_agents: dict[str, SubAgentSlot] = Field(default_factory=dict)
     cycle_count: int = 0
 

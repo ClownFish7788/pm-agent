@@ -20,6 +20,7 @@ MVP 节点：
 
 from __future__ import annotations
 
+from agents.middle import DEPARTMENT_NAME_MAP
 from agents.middle.market import MarketLeader
 from agents.middle.competitor import CompetitorLeader
 from agents.middle.product import ProductLeader
@@ -497,12 +498,12 @@ def _print_ceo_report(report: FinalReport, state: GlobalState) -> None:
         report：LLM 产出的 FinalReport
         state：全局状态（用于统计）
     """
-    dept_icons = {
-        "market_research": "📊 市场调研",
-        "competitor_analysis": "🏢 竞品分析",
-        "product_design": "🎨 产品设计",
-        "future_direction": "🔮 未来方向",
-        "change_plan": "⚡ 当下改变",
+    dept_labels = {
+        "market_research": f"📊 {DEPARTMENT_NAME_MAP.get('market_research', '市场调研')}",
+        "competitor_analysis": f"🏢 {DEPARTMENT_NAME_MAP.get('competitor_analysis', '竞品分析')}",
+        "product_design": f"🎨 {DEPARTMENT_NAME_MAP.get('product_design', '产品设计')}",
+        "future_direction": f"🔮 {DEPARTMENT_NAME_MAP.get('future_direction', '未来方向')}",
+        "change_plan": f"⚡ {DEPARTMENT_NAME_MAP.get('change_plan', '当下改变')}",
     }
 
     print(f"\n  {'=' * 64}")
@@ -520,7 +521,7 @@ def _print_ceo_report(report: FinalReport, state: GlobalState) -> None:
     print(f"  二、各部门分析报告")
     print(f"  {'─' * 64}")
 
-    for dept_key, dept_label in dept_icons.items():
+    for dept_key, dept_label in dept_labels.items():
         ceo_summary = report.department_summaries.get(dept_key, "")
         dept_state = getattr(state, dept_key, None)
 
@@ -613,7 +614,7 @@ def _print_ceo_report(report: FinalReport, state: GlobalState) -> None:
     print(f"  {'─' * 64}")
     for dim, conf in report.dimension_confidence.items():
         bar = "█" * int(conf * 10) + "░" * (10 - int(conf * 10))
-        label = dept_icons.get(dim, dim)
+        label = dept_labels.get(dim, dim)
         print(f"  {label:20s} {conf:.0%} [{bar}]")
 
     # === 全局统计 ===
