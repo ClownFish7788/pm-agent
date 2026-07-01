@@ -1,34 +1,37 @@
 "use client";
 
 /**
- * 部门摘要网格 —— 2 行 × 3 列卡片。
+ * 部门摘要网格 —— 动态列数响应式卡片。
  * 每个卡片展示部门的 CEO 提炼摘要 + 可信度。
+ * 不再硬编码部门顺序——从 summaries/confidence 的 key 动态渲染。
  */
 
-import { DEPARTMENT_LABELS } from "@/types/history";
+import { DEPARTMENT_LABELS } from "@/types/schemas";
 
 interface DepartmentGridProps {
   summaries: Record<string, string>;
   confidence: Record<string, number>;
 }
 
-const DEPT_ICONS: Record<string, string> = {
-  market_research: "📊",
-  competitor_analysis: "🏢",
-  product_design: "🎨",
-  future_direction: "🔮",
-  change_plan: "⚡",
-};
-
-const DEPT_ORDER = [
-  "market_research",
-  "competitor_analysis",
-  "product_design",
-  "future_direction",
-  "change_plan",
-];
+function _deptIcon(key: string): string {
+  const icons: Record<string, string> = {
+    market_research: "📊",
+    competitor_analysis: "🏢",
+    product_design: "🎨",
+    future_direction: "🔮",
+    change_plan: "⚡",
+    user_analysis: "👥",
+    growth_strategy: "🚀",
+  };
+  return icons[key] ?? "📋";
+}
 
 export default function DepartmentGrid({ summaries, confidence }: DepartmentGridProps) {
+  // 从实际数据中提取所有部门 key（合并 summaries 和 confidence 的 key）
+  const allKeys = Array.from(
+    new Set([...Object.keys(summaries), ...Object.keys(confidence)])
+  );
+
   return (
     <div>
       <h2 className="text-lg font-semibold text-bamboo-800 mb-4 tracking-tight">
@@ -36,11 +39,11 @@ export default function DepartmentGrid({ summaries, confidence }: DepartmentGrid
       </h2>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {DEPT_ORDER.map((key) => {
+        {allKeys.map((key) => {
           const summary = summaries[key];
           const conf = confidence[key];
-          const icon = DEPT_ICONS[key] ?? "📋";
-          const label = DEPARTMENT_LABELS[key as keyof typeof DEPARTMENT_LABELS] ?? key;
+          const icon = _deptIcon(key);
+          const label = DEPARTMENT_LABELS[key] ?? key;
 
           // 跳过的部门
           if (summary === undefined && conf === undefined) {
@@ -76,7 +79,6 @@ export default function DepartmentGrid({ summaries, confidence }: DepartmentGrid
               style={{ borderTopWidth: 3, borderTopColor: barColor }}
             >
               <div className="p-4">
-                {/* 头部 */}
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <span className="text-sm">{icon}</span>
@@ -92,7 +94,6 @@ export default function DepartmentGrid({ summaries, confidence }: DepartmentGrid
                   )}
                 </div>
 
-                {/* CEO 提炼 */}
                 {summary ? (
                   <p className="text-xs text-bamboo-600 leading-relaxed line-clamp-4">
                     {summary}

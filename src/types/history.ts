@@ -26,11 +26,11 @@ export interface HistoryRecord {
 
 /** 部门中文名映射 */
 export const DEPARTMENT_LABELS: Record<string, string> = {
-  market_research: "市场",
-  competitor_analysis: "竞品",
-  product_design: "产品",
-  future_direction: "未来",
-  change_plan: "改变",
+  market_research: "市场调研",
+  competitor_analysis: "竞品分析",
+  product_design: "产品设计",
+  future_direction: "未来方向",
+  change_plan: "当下改变",
 };
 
 /** 评分颜色：绿 ≥70 / 黄 40-69 / 红 <40 */

@@ -22,9 +22,11 @@ interface ReportViewProps {
 
 export default function ReportView({
   report,
-  departmentCount = 5,
-  callCount = 33,
+  departmentCount,
+  callCount = 0,
 }: ReportViewProps) {
+  const actualDeptCount = departmentCount ?? Object.keys(report.dimension_confidence).length;
+  const actualCallCount = callCount ?? 0;
   return (
     <div className="flex flex-col min-h-full max-w-[860px] mx-auto w-full px-8 py-10">
       {/* ================================================================ */}
@@ -34,8 +36,8 @@ export default function ReportView({
         <ScoreHero
           overallScore={report.overall_score}
           dimensionConfidence={report.dimension_confidence}
-          departmentCount={departmentCount}
-          callCount={callCount}
+          departmentCount={actualDeptCount}
+          callCount={actualCallCount}
         />
       </section>
 
