@@ -16,6 +16,7 @@ Tavily Search Provider 实现。
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 
@@ -102,11 +103,10 @@ class TavilyProvider(BaseSearchProvider):
         # ---- 步骤 1：合并选项 ----
         opts = options or SearchOptions()  # None → 使用默认值
 
-        # ---- 步骤 2：调用 Tavily API ----
+        # ---- 步骤 2：调用 Tavily API（同步 SDK → asyncio.to_thread） ----
         try:
-            # Tavily SDK 是同步的，用 run_in_executor 不会阻塞事件循环
-            # 对于 MVP 控制台脚本，直接同步调用更简单
-            raw_response = self._client.search(
+            raw_response = await asyncio.to_thread(
+                self._client.search,
                 query=query,
                 search_depth=opts.search_depth,
                 max_results=opts.max_results,
