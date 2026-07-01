@@ -294,9 +294,13 @@ class BaseMiddleLeader:
                     slot.latest_output = report
                 slot.round_number = cycle
 
-            # 审核
-            pending_slots = {sid: sub_slots[sid] for sid in pending_ids}
-            reviews = await self._review_sub_agents(pending_slots, project_summary)
+            # 审核 —— 只审核有搜索结果的 slot（UNCERTAIN 的跳过，防止空结果被误标 PASSED）
+            review_candidates = {
+                sid: sub_slots[sid]
+                for sid in pending_ids
+                if sub_slots[sid].status != AgentStatus.UNCERTAIN
+            }
+            reviews = await self._review_sub_agents(review_candidates, project_summary) if review_candidates else []
 
             all_passed = True
             for review in reviews:
@@ -385,7 +389,7 @@ class BaseMiddleLeader:
             result: ReviewResult = await self.llm.chat_structured(
                 messages=messages,
                 output_schema=ReviewResult,
-                max_tokens=2048,
+                max_tokens=8192,
             )
             return result.reviews
         except Exception as e:
@@ -393,10 +397,10 @@ class BaseMiddleLeader:
             return [
                 SubAgentReview(
                     sub_id=info["sub_id"],
-                    overall_score=5.0, completeness=5.0,
-                    credibility=5.0, freshness=5.0, relevance=5.0,
+                    overall_score=0.0, completeness=0.0,
+                    credibility=0.0, freshness=0.0, relevance=0.0,
                     verdict="passed",
-                    reason="审核 LLM 调用失败，默认通过",
+                    reason=f"审核 LLM 异常（{type(e).__name__}），未经审核放行",
                     improved_query="",
                 )
                 for info in sub_slots_info
