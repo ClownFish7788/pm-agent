@@ -325,9 +325,9 @@ class SubAgentReview(BaseModel):
     credibility: float = Field(default=0.0, ge=0, le=10, description="可信度 0-10")
     freshness: float = Field(default=0.0, ge=0, le=10, description="时效性 0-10")
     relevance: float = Field(default=0.0, ge=0, le=10, description="相关度 0-10")
-    verdict: Literal["passed", "rejected"] = Field(
+    verdict: Literal["passed", "rejected", "abandon"] = Field(
         default="passed",
-        description="审核结论：passed=通过 | rejected=驳回（overall<5 或 credibility<4）"
+        description="审核结论：passed=通过 | rejected=驳回 | abandon=放弃（多次重搜仍不达标）"
     )
     reason: str = Field(
         default="",
@@ -458,6 +458,67 @@ class DepartmentState(BaseModel):
     )
     cycle_count: int = Field(default=0, description="本部门整体循环/驳回次数")
     department_type: str = Field(default="", description="部门类型标识（如 'market_research'）")
+
+
+# =============================================================================
+# 内层审核子图 State（LangGraph 管理每部门内的 search → review 循环）
+# =============================================================================
+
+
+class AgentSlot(BaseModel):
+    """单个底层子 Agent 的完整状态槽 —— review 每次覆盖，round 独立计数。
+
+    设计要点：
+    - 每个 agent 有自己的 round 计数器（不像全局 cycle_count 一刀切）
+    - review 每次覆盖（不保留历史），report 在审核完成后覆盖（无论 passed/rejected）
+    - key_findings_summary 保留 ≤5 条摘要供中层综合分析引用
+    """
+
+    sub_id: str = Field(description="子 Agent ID，如 'marketresearch_2'")
+    search_query: str = Field(default="", description="当前搜索关键词（rejected 时更新为 improved_query）")
+    report: BottomReport | None = Field(default=None, description="最新搜索报告（审核后覆盖）")
+    review: SubAgentReview | None = Field(default=None, description="最新审核结果（每次覆盖）")
+    key_findings_summary: list[str] = Field(
+        default_factory=list,
+        description="本轮 ≤5 条关键发现摘要（≤150 字/条），供中层分析引用"
+    )
+    round: int = Field(default=0, description="当前轮次（1-indexed），独立于其他 agent")
+    status: AgentStatus = Field(default=AgentStatus.IDLE, description="本轮状态")
+
+
+class ReviewState(BaseModel):
+    """内层审核子图的全局 State —— 一个部门内的 search→review 循环。
+
+    LangGraph 的 checkpoint 保存此 State，支持：
+    - 暂停 → 注入 task.instruction 或 agent_slots 的 search_query
+    - 恢复 → agent 从各自的 round 断点继续
+    """
+
+    # ===== 部门上下文 =====
+    dept_key: str = Field(default="", description="部门标识，如 'market_research'")
+    display_name: str = Field(default="", description="部门中文名")
+    project_summary: str = Field(default="", description="项目描述摘要")
+    task: DepartmentTask | None = Field(default=None, description="顶层下发的任务（暂停时可改 instruction）")
+
+    # ===== 子 Agent 结果槽 =====
+    agent_slots: dict[str, AgentSlot] = Field(
+        default_factory=dict,
+        description="所有底层子 Agent 的状态槽，key=sub_id"
+    )
+    max_rounds_per_agent: int = Field(default=5, description="单 agent 最大重试轮数（防死循环）")
+
+    @property
+    def unresolved_ids(self) -> list[str]:
+        """返回还需处理的 agent ID（IDLE 或 REJECTED）。"""
+        return [
+            sid for sid, slot in self.agent_slots.items()
+            if slot.status in (AgentStatus.IDLE, AgentStatus.REJECTED)
+        ]
+
+    @property
+    def is_done(self) -> bool:
+        """所有 agent 都已 PASSED 或 UNCERTAIN（abandon）→ 子图结束。"""
+        return len(self.unresolved_ids) == 0
 
 
 # =============================================================================

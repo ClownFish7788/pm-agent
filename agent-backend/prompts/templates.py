@@ -1029,22 +1029,28 @@ MIDDLE_REVIEWER_SYSTEM_PROMPT = """\
 3. **freshness**（时效性）：数据是否过时？是否引用了近 1-2 年的数据？（如果报告未提时间，酌情扣分）
 4. **relevance**（相关度）：报告内容与搜索方向的匹配程度？有没有跑题？
 
-## 驳回规则
+## 判定规则
 
-- **overall_score < 5**（四维平均）→ 驳回
-- **或 credibility < 4** → 驳回（来源不可信，内容再好也没用）
+- **overall_score >= 5 且 credibility >= 4** → **passed**（数据达标）
+- **overall_score < 5 或 credibility < 4，且该 agent 已重试 < 2 次** → **rejected**（不够，换搜索词重来）
+- **overall_score < 5 或 credibility < 4，且该 agent 已重试 >= 2 次** → **abandon**（搜到底了，放弃）
 
-## 驳回时必须提供
+## rejected 时必须提供
 
 - **reason**：具体哪里不达标（≤ 100 字），如：
   - 「来源均为个人博客和论坛帖子，无权威行业数据支撑」
   - 「报告内容过于空泛，缺少具体数字和统计」
   - 「搜索结果与搜索方向相关性低，大量无关内容」
-- **improved_query**：改进后的搜索关键词，解决当前报告的短板，如：
+- **improved_query**：改进后的搜索关键词，如：
   - 原 query 太宽泛 → 加限定词（"行业报告"、"2025数据"、"官方统计"）
   - 来源权威度低 → 加 "site:gov.cn" 或 "研究报告"
   - 时效性差 → 加 "2025"、"最新"
   - 相关性低 → 调整关键词使其更精准
+
+## abandon 时
+
+- **reason**：说明为什么放弃（≤ 100 字）
+- **improved_query**：留空（不再重搜）
 
 ## 输出格式
 

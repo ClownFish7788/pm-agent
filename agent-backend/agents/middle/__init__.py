@@ -3,20 +3,22 @@
 
 职责：
 - 调度底层 Agent（搜索 + LLM 筛选 + 归类 + 报告）
-- 审核底层报告质量 → 驳回重做（最多 3 轮）
+- LangGraph 子图管理 search→review 循环（每轮批量审核，passed 筛掉，rejected 继续）
 - 调 LLM 综合分析 → 输出 DepartmentState
 
 核心：
 - BaseMiddleLeader：模板引擎，构造函数注入 dept_key + display_name
-- DEPARTMENT_NAME_MAP：部门标识 → 中文名（唯一真源）
-- KNOWN_PROMPT_BUILDERS：预置部门 → 专用 prompt 映射（自创部门用通用 prompt）
+- _build_review_subgraph：部门内 search→review 循环的 LangGraph 子图
+- ReviewState / AgentSlot：子图 State（checkpoint 到 agent 级）
 """
 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from typing import Callable
+from typing import Any, Callable
+
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import StateGraph, END
 
 from agents.bottom.search import SearchAgent
 from llm.base import BaseLLMProvider
@@ -31,12 +33,13 @@ from prompts.templates import (
     build_generic_department_prompt,
 )
 from schemas import (
+    AgentSlot,
     AgentStatus,
     BottomReport,
     DepartmentState,
     DepartmentTask,
-    RejectionEntry,
     ReviewResult,
+    ReviewState,
     SearchStrategy,
     SubAgentReview,
     SubAgentSlot,
@@ -46,7 +49,7 @@ from utils.logger import log_agent_output, log_error
 from utils.progress import ProgressTracker
 
 # =============================================================================
-# 部门标识 → 中文名（唯一真源，SSE / 控制台 / dag/nodes.py 共用）
+# 部门标识 → 中文名（唯一真源）
 # =============================================================================
 
 DEPARTMENT_NAME_MAP: dict[str, str] = {
@@ -58,7 +61,7 @@ DEPARTMENT_NAME_MAP: dict[str, str] = {
 }
 
 # =============================================================================
-# 预置部门 → 专用 prompt builder 映射（自创部门不在映射中 → 通用 prompt）
+# 预置部门 → 专用 prompt builder 映射
 # =============================================================================
 
 KNOWN_PROMPT_BUILDERS: dict[str, Callable[..., list[dict[str, str]]]] = {
@@ -71,12 +74,11 @@ KNOWN_PROMPT_BUILDERS: dict[str, Callable[..., list[dict[str, str]]]] = {
 
 
 def _get_prompt_builder(dept_key: str) -> Callable[..., list[dict[str, str]]]:
-    """根据部门类型获取 prompt builder。预置 → 专用 prompt；未知 → 通用 prompt。"""
     return KNOWN_PROMPT_BUILDERS.get(dept_key, build_generic_department_prompt)
 
 
 # =============================================================================
-# 底层搜索工具函数
+# 底层搜索
 # =============================================================================
 
 async def _search_one(
@@ -88,7 +90,7 @@ async def _search_one(
     department: str | None = None,
     tracker: ProgressTracker | None = None,
 ) -> tuple[str, BottomReport | None, str | None]:
-    """执行一次搜索，永不抛异常 —— 异常内化为返回三元组的第三个元素。"""
+    """执行一次搜索，永不抛异常。"""
     try:
         agent = SearchAgent(
             agent_id=sub_id,
@@ -101,12 +103,191 @@ async def _search_one(
         return (sub_id, report, None)
     except Exception as exc:
         if tracker is not None:
-            tracker.error(
-                f"搜索异常: {type(exc).__name__}: {exc}",
-                department=department,
-                agent_id=sub_id,
-            )
+            tracker.error(f"搜索异常: {type(exc).__name__}: {exc}", department=department, agent_id=sub_id)
         return (sub_id, None, f"{type(exc).__name__}: {exc}")
+
+
+# =============================================================================
+# LangGraph 审核子图
+# =============================================================================
+
+async def _batch_review(
+    candidates: dict[str, AgentSlot],
+    project_summary: str,
+    llm: BaseLLMProvider,
+    display_name: str,
+) -> list[SubAgentReview]:
+    """批量调 LLM 审核一批子 Agent 的研究报告（被 subgraph 节点调用）。"""
+    sub_slots_info: list[dict] = []
+    for sub_id, slot in candidates.items():
+        info: dict = {
+            "sub_id": sub_id,
+            "search_query": slot.search_query,
+            "report": "",
+            "findings_count": 0,
+            "key_findings_summary": [],
+        }
+        if slot.report is not None:
+            info["report"] = slot.report.report
+            info["findings_count"] = len(slot.report.key_findings)
+            for f in slot.report.key_findings:
+                info["key_findings_summary"].append(f"[{f.source_type}] {f.insight[:120]}")
+        sub_slots_info.append(info)
+
+    messages = build_review_prompt(sub_slots_info, project_summary)
+
+    try:
+        result: ReviewResult = await llm.chat_structured(
+            messages=messages, output_schema=ReviewResult, max_tokens=8192,
+        )
+        return result.reviews
+    except Exception as e:
+        log_error(f"{display_name}.review", f"审核调用失败: {type(e).__name__}: {e}")
+        return [
+            SubAgentReview(
+                sub_id=info["sub_id"],
+                overall_score=0.0, completeness=0.0,
+                credibility=0.0, freshness=0.0, relevance=0.0,
+                verdict="passed",
+                reason=f"审核 LLM 异常（{type(e).__name__}），未经审核放行",
+                improved_query="",
+            )
+            for info in sub_slots_info
+        ]
+
+
+def _build_review_subgraph(
+    llm: BaseLLMProvider,
+    search_provider: BaseSearchProvider,
+    *,
+    tracker: ProgressTracker | None = None,
+) -> Any:
+    """构建部门内 search→review 循环的 LangGraph 子图。
+
+    两节点 + 条件边：
+
+        [search] → [review] → 条件边
+                      ├── done   → END
+                      └── search → [search]（只搜 unresolved）
+
+    每轮：asyncio.gather 并行搜 unresolved → 批量 LLM 审核 → passed 筛掉 → rejected 下一轮。
+    """
+
+    builder = StateGraph(ReviewState)
+
+    # ---- search 节点 ----
+    async def _node_search(state: ReviewState) -> dict:
+        ids = state.unresolved_ids
+        if not ids:
+            return {}
+
+        print(f"  [{state.display_name}] 搜索 {len(ids)} 个方向:")
+        for sid in ids:
+            slot = state.agent_slots[sid]
+            print(f"      {sid}: \"{slot.search_query}\" (第 {slot.round + 1} 轮)")
+
+        # SSE
+        for sid in ids:
+            if tracker is not None:
+                tracker.sub_agent_start(
+                    dept=state.dept_key, agent_id=sid,
+                    search_query=state.agent_slots[sid].search_query,
+                    call_count=llm.call_count,
+                )
+
+        # 并行搜索
+        tasks = [
+            _search_one(sid, state.agent_slots[sid].search_query, llm, search_provider,
+                        department=state.dept_key, tracker=tracker)
+            for sid in ids
+        ]
+        results = await asyncio.gather(*tasks)
+
+        # 写入结果
+        for sub_id, report, error in results:
+            slot = state.agent_slots[sub_id]
+            if error is not None:
+                slot.status = AgentStatus.UNCERTAIN
+                log_error(sub_id, f"搜索异常: {error}")
+            else:
+                slot.report = report
+                slot.key_findings_summary = [f.insight[:150] for f in (report.key_findings or [])]
+            slot.round += 1
+
+        return {"agent_slots": state.agent_slots}
+
+    # ---- review 节点 ----
+    async def _node_review(state: ReviewState) -> dict:
+        ids = state.unresolved_ids
+        # 只审核本轮有搜索结果的 agent
+        candidates = {
+            sid: state.agent_slots[sid]
+            for sid in ids
+            if state.agent_slots[sid].status != AgentStatus.UNCERTAIN
+            and state.agent_slots[sid].report is not None
+        }
+        if not candidates:
+            return {}
+
+        reviews = await _batch_review(candidates, state.project_summary, llm, state.display_name)
+
+        rejections: list[str] = []
+        for review in reviews:
+            slot = state.agent_slots.get(review.sub_id)
+            if slot is None:
+                continue
+            slot.review = review
+
+            if review.verdict == "passed":
+                slot.status = AgentStatus.PASSED
+                print(f"      {review.sub_id}: 通过 "
+                      f"(overall={review.overall_score:.1f}, cred={review.credibility:.1f})")
+            elif review.verdict == "abandon":
+                slot.status = AgentStatus.UNCERTAIN
+                print(f"      {review.sub_id}: 放弃 (overall={review.overall_score:.1f})")
+                print(f"         原因: {review.reason}")
+            else:  # rejected
+                rejections.append(review.reason)
+                if slot.round >= state.max_rounds_per_agent:
+                    slot.status = AgentStatus.UNCERTAIN
+                    print(f"      {review.sub_id}: 超限放弃 (round={slot.round})")
+                else:
+                    slot.status = AgentStatus.REJECTED
+                    slot.search_query = review.improved_query or slot.search_query
+                    print(f"      {review.sub_id}: 驳回 (overall={review.overall_score:.1f})")
+                    print(f"         原因: {review.reason}")
+                    print(f"         新搜索词: {review.improved_query}")
+
+            # SSE
+            if tracker is not None:
+                tracker.sub_agent_review(
+                    dept=state.dept_key, agent_id=review.sub_id,
+                    verdict=review.verdict,
+                    overall=review.overall_score,
+                    credibility=review.credibility,
+                    reason=review.reason,
+                    call_count=llm.call_count,
+                )
+
+        # instruction 回写
+        if rejections and state.task is not None:
+            summary = "; ".join(rejections[:3])
+            state.task.instruction = f"上一轮搜索问题：{summary}"
+
+        return {"agent_slots": state.agent_slots, "task": state.task}
+
+    # ---- 条件路由 ----
+    def _route(state: ReviewState) -> str:
+        return "done" if state.is_done else "search"
+
+    # ---- 装配 ----
+    builder.add_node("search", _node_search)
+    builder.add_node("review", _node_review)
+    builder.set_entry_point("search")
+    builder.add_edge("search", "review")
+    builder.add_conditional_edges("review", _route, {"done": END, "search": "search"})
+
+    return builder.compile(checkpointer=MemorySaver())
 
 
 # =============================================================================
@@ -116,9 +297,8 @@ async def _search_one(
 class BaseMiddleLeader:
     """中层 Leader 模板 —— 所有部门共享同一套 6 步分析流程。
 
-    构造函数注入部门标识 + 显示名，prompt builder 自动查表：
-    - 预置部门 → 手写专用 prompt
-    - 自创部门 → 通用 prompt（读取 task.task_description + metrics）
+    内层审核循环由 LangGraph 子图管理（_build_review_subgraph），
+    支持暂停注入 + checkpoint 恢复。
     """
 
     def __init__(
@@ -135,7 +315,6 @@ class BaseMiddleLeader:
         self.tracker = tracker
         self.dept_key = dept_key
         self.display_name = display_name
-        # 自动选择 prompt builder
         self._prompt_builder = _get_prompt_builder(dept_key)
 
     # ------------------------------------------------------------------
@@ -145,12 +324,7 @@ class BaseMiddleLeader:
     async def run(self, project_summary: str, task: DepartmentTask) -> DepartmentState:
         """执行本部门的完整分析流程。
 
-        Args:
-            project_summary: 项目描述摘要
-            task: 顶层下发的专属任务（含 task_description / focus_areas / metrics / instruction）
-
-        Returns:
-            DepartmentState 实例
+        步骤 3 为 LangGraph 子图：search → review → 条件路由 → 循环直到所有 agent 被处理。
         """
 
         # ---- 步骤 1：LLM 生成搜索关键词 ----
@@ -159,26 +333,39 @@ class BaseMiddleLeader:
         for i, q in enumerate(search_queries, 1):
             print(f"      {i}. {q}")
 
-        # ---- 步骤 2：初始化子 Agent 卡槽 ----
-        # sub_id 前缀 = dept_key 去下划线取前 20 字符
+        # ---- 步骤 2：初始化 AgentSlot（子图 State） ----
         prefix = self.dept_key.replace("_", "")[:20]
-        sub_slots: dict[str, SubAgentSlot] = {}
+        agent_slots: dict[str, AgentSlot] = {}
         for i, query in enumerate(search_queries):
             sub_id = f"{prefix}_{i + 1}"
-            sub_slots[sub_id] = SubAgentSlot(
+            agent_slots[sub_id] = AgentSlot(
                 sub_id=sub_id,
                 search_query=query,
-                latest_output=None,
-                round_number=0,
-                rejection_log=[],
                 status=AgentStatus.IDLE,
             )
 
-        # ---- 步骤 3：审核 + 驳回循环（最多 3 轮） ----
-        cycle_count = await self._run_review_loop(sub_slots, project_summary, task=task)
+        # ---- 步骤 3：LangGraph 子图 search→review 循环 ----
+        review_graph = _build_review_subgraph(self.llm, self.search_provider, tracker=self.tracker)
+        initial_state = ReviewState(
+            dept_key=self.dept_key,
+            display_name=self.display_name,
+            project_summary=project_summary,
+            task=task,
+            agent_slots=agent_slots,
+        )
+        final_state: ReviewState = await review_graph.ainvoke(initial_state)
 
-        # ---- 步骤 4：汇总底层发现 → 格式化文本 ----
-        findings_text = self._format_all_findings(sub_slots)
+        # ---- 步骤 4：汇总底层发现 → 格式化文本（AgentSlot → SubAgentSlot 转换） ----
+        sub_slots: dict[str, SubAgentSlot] = {}
+        for sid, slot in final_state.agent_slots.items():
+            sub_slots[sid] = SubAgentSlot(
+                sub_id=sid,
+                search_query=slot.search_query,
+                latest_output=slot.report,
+                round_number=slot.round,
+                status=slot.status,
+            )
+        findings_text = self._format_all_findings(final_state.agent_slots)
 
         # ---- 步骤 5：调 LLM 综合分析 ----
         messages = self._prompt_builder(
@@ -186,21 +373,18 @@ class BaseMiddleLeader:
             findings_text=findings_text,
             task=task,
         )
-
         try:
             raw_result = await self.llm.chat_structured(
-                messages=messages,
-                output_schema=DepartmentState,
-                max_tokens=4096,
+                messages=messages, output_schema=DepartmentState, max_tokens=4096,
             )
         except Exception as e:
             log_error(self.display_name, f"LLM 综合分析失败: {type(e).__name__}: {e}")
             if self.tracker is not None:
                 self.tracker.error(f"LLM 综合分析失败: {e}", department=self.dept_key)
-            return self._build_fallback_state(project_summary, task, sub_slots, cycle_count, str(e))
+            return self._build_fallback_state(project_summary, task, sub_slots, str(e))
 
         # ---- 步骤 6：构造最终 State ----
-        state = self._build_state(raw_result, project_summary, task, sub_slots, cycle_count)
+        state = self._build_state(raw_result, project_summary, task, sub_slots)
 
         # SSE: 部门完成
         if self.tracker is not None:
@@ -217,7 +401,7 @@ class BaseMiddleLeader:
         log_agent_output(
             agent_name=self.display_name,
             agent_emoji="",
-            input_summary=f"项目: {project_summary[:100]} | 审核轮次: {cycle_count} | 关注: {task.focus_areas}",
+            input_summary=f"项目: {project_summary[:100]} | 关注: {task.focus_areas}",
             output={
                 "summary": state.summary[:200] if state.summary else "无",
                 "key_points_count": len(state.key_points),
@@ -229,7 +413,6 @@ class BaseMiddleLeader:
                         "query": slot.search_query,
                         "status": slot.status.value,
                         "round": slot.round_number,
-                        "rejections": len(slot.rejection_log),
                         "findings_count": len(slot.latest_output.key_findings) if slot.latest_output else 0,
                     }
                     for sid, slot in sub_slots.items()
@@ -240,185 +423,17 @@ class BaseMiddleLeader:
         return state
 
     # ------------------------------------------------------------------
-    # 审核循环
+    # 搜索结果格式化（AgentSlot）
     # ------------------------------------------------------------------
 
-    async def _run_review_loop(
-        self,
-        sub_slots: dict[str, SubAgentSlot],
-        project_summary: str,
-        task: DepartmentTask | None = None,
-    ) -> int:
-        """审核 + 驳回循环（最多 3 轮），驳回时回写 task.instruction。"""
-        max_cycles = 3
-        cycle_count = 0
-        rejection_reasons: list[str] = []
-
-        for cycle in range(1, max_cycles + 1):
-            cycle_count = cycle
-
-            pending_ids = [
-                sid for sid, slot in sub_slots.items()
-                if slot.status in (AgentStatus.IDLE, AgentStatus.REJECTED)
-            ]
-            if not pending_ids:
-                break
-
-            print(f"  [{self.display_name}] 第 {cycle}/{max_cycles} 轮审核 — "
-                  f"待执行: {len(pending_ids)} 个子 Agent")
-
-            # SSE: 子 Agent 启动
-            for sid in pending_ids:
-                if self.tracker is not None:
-                    self.tracker.sub_agent_start(
-                        dept=self.dept_key, agent_id=sid,
-                        search_query=sub_slots[sid].search_query,
-                        call_count=self.llm.call_count,
-                    )
-
-            # 并行搜索
-            tasks = [
-                _search_one(sid, sub_slots[sid].search_query, self.llm, self.search_provider,
-                            department=self.dept_key, tracker=self.tracker)
-                for sid in pending_ids
-            ]
-            results = await asyncio.gather(*tasks)
-
-            for sub_id, report, error in results:
-                slot = sub_slots[sub_id]
-                if error is not None:
-                    slot.latest_output = None
-                    slot.status = AgentStatus.UNCERTAIN
-                    log_error(sub_id, f"搜索异常: {error}")
-                else:
-                    slot.latest_output = report
-                slot.round_number = cycle
-
-            # 审核 —— 只审核有搜索结果的 slot（UNCERTAIN 的跳过，防止空结果被误标 PASSED）
-            review_candidates = {
-                sid: sub_slots[sid]
-                for sid in pending_ids
-                if sub_slots[sid].status != AgentStatus.UNCERTAIN
-            }
-            reviews = await self._review_sub_agents(review_candidates, project_summary) if review_candidates else []
-
-            all_passed = True
-            for review in reviews:
-                slot = sub_slots.get(review.sub_id)
-                if slot is None:
-                    continue
-
-                if review.verdict == "passed":
-                    slot.status = AgentStatus.PASSED
-                    print(f"      ✅ {review.sub_id}: 通过 "
-                          f"(overall={review.overall_score:.1f}, cred={review.credibility:.1f})")
-                else:
-                    all_passed = False
-                    rejection_reasons.append(review.reason)
-                    slot.rejection_log.append(RejectionEntry(
-                        round=cycle,
-                        reason=review.reason,
-                        instruction=review.improved_query,
-                        timestamp=datetime.now(timezone.utc).isoformat(),
-                    ))
-                    if cycle < max_cycles:
-                        slot.status = AgentStatus.REJECTED
-                        slot.search_query = review.improved_query
-                        print(f"      ❌ {review.sub_id}: 驳回 (overall={review.overall_score:.1f})")
-                        print(f"         原因: {review.reason}")
-                        print(f"         新搜索词: {review.improved_query}")
-                    else:
-                        slot.status = AgentStatus.UNCERTAIN
-                        print(f"      ⚠️  {review.sub_id}: 超限放弃 (overall={review.overall_score:.1f})")
-
-                if self.tracker is not None:
-                    self.tracker.sub_agent_review(
-                        dept=self.dept_key, agent_id=review.sub_id,
-                        verdict=review.verdict,
-                        overall=review.overall_score,
-                        credibility=review.credibility,
-                        reason=review.reason,
-                        call_count=self.llm.call_count,
-                    )
-
-            if all_passed:
-                print(f"  [{self.display_name}] 全部通过审核")
-                break
-
-        for slot in sub_slots.values():
-            if slot.status == AgentStatus.REJECTED:
-                slot.status = AgentStatus.UNCERTAIN
-
-        if rejection_reasons and task is not None:
-            summary = "; ".join(rejection_reasons[:3])
-            task.instruction = f"上一轮搜索问题：{summary}"
-
-        return cycle_count
-
-    # ------------------------------------------------------------------
-    # 审核
-    # ------------------------------------------------------------------
-
-    async def _review_sub_agents(
-        self,
-        pending_slots: dict[str, SubAgentSlot],
-        project_summary: str,
-    ) -> list[SubAgentReview]:
-        """调 LLM 审核待审子 Agent 的研究报告。"""
-        sub_slots_info: list[dict] = []
-        for sub_id, slot in pending_slots.items():
-            info: dict = {
-                "sub_id": sub_id,
-                "search_query": slot.search_query,
-                "report": "",
-                "findings_count": 0,
-                "key_findings_summary": [],
-            }
-            if slot.latest_output is not None:
-                info["report"] = slot.latest_output.report
-                info["findings_count"] = len(slot.latest_output.key_findings)
-                for f in slot.latest_output.key_findings:
-                    info["key_findings_summary"].append(
-                        f"[{f.source_type}] {f.insight[:120]}"
-                    )
-            sub_slots_info.append(info)
-
-        messages = build_review_prompt(sub_slots_info, project_summary)
-
-        try:
-            result: ReviewResult = await self.llm.chat_structured(
-                messages=messages,
-                output_schema=ReviewResult,
-                max_tokens=8192,
-            )
-            return result.reviews
-        except Exception as e:
-            log_error(f"{self.display_name}.review", f"审核调用失败: {type(e).__name__}: {e}")
-            return [
-                SubAgentReview(
-                    sub_id=info["sub_id"],
-                    overall_score=0.0, completeness=0.0,
-                    credibility=0.0, freshness=0.0, relevance=0.0,
-                    verdict="passed",
-                    reason=f"审核 LLM 异常（{type(e).__name__}），未经审核放行",
-                    improved_query="",
-                )
-                for info in sub_slots_info
-            ]
-
-    # ------------------------------------------------------------------
-    # 搜索结果格式化
-    # ------------------------------------------------------------------
-
-    def _format_all_findings(self, sub_slots: dict[str, SubAgentSlot]) -> str:
-        """将所有底层 Agent 的发现格式化为一段文本（含审核状态）。"""
+    def _format_all_findings(self, agent_slots: dict[str, AgentSlot]) -> str:
         parts: list[str] = []
         finding_index = 0
 
-        for sub_id, slot in sub_slots.items():
+        for sub_id, slot in agent_slots.items():
             status_label = {
                 AgentStatus.PASSED: "通过",
-                AgentStatus.UNCERTAIN: "存疑（多轮未达标）",
+                AgentStatus.UNCERTAIN: "存疑",
                 AgentStatus.REJECTED: "已驳回",
                 AgentStatus.RUNNING: "执行中",
                 AgentStatus.IDLE: "待执行",
@@ -426,18 +441,16 @@ class BaseMiddleLeader:
             }.get(slot.status, "未知")
 
             parts.append(f"=== 搜索方向: {slot.search_query} ===")
-            parts.append(f"Agent: {sub_id} | 状态: {status_label} | 第 {slot.round_number} 轮")
+            parts.append(f"Agent: {sub_id} | 状态: {status_label} | 第 {slot.round} 轮")
 
-            if slot.rejection_log:
-                parts.append(f"驳回记录 ({len(slot.rejection_log)} 次):")
-                for r in slot.rejection_log:
-                    parts.append(f"  - 第 {r.round} 轮: {r.reason}")
+            if slot.review and slot.review.verdict != "passed":
+                parts.append(f"审核: {slot.review.verdict} (overall={slot.review.overall_score:.1f}) — {slot.review.reason}")
 
-            if slot.latest_output is None:
+            if slot.report is None:
                 parts.append("(无结果)")
                 continue
 
-            output = slot.latest_output
+            output = slot.report
             parts.append(f"研究报告: {output.report}")
             parts.append(f"关键发现 ({len(output.key_findings)} 条):")
             parts.append("")
@@ -453,49 +466,34 @@ class BaseMiddleLeader:
         return "\n".join(parts)
 
     # ------------------------------------------------------------------
-    # 搜索策略生成（LLM 自主 + 字符串拼接兜底）
+    # 搜索策略生成
     # ------------------------------------------------------------------
 
     async def _generate_search_queries(
         self, task: DepartmentTask, project_summary: str = ""
     ) -> list[str]:
-        """LLM 自主生成搜索关键词，失败时 fallback 到 core_topic + focus_areas 拼接。"""
         try:
             messages = build_search_strategy_prompt(task, project_summary)
             strategy: SearchStrategy = await self.llm.chat_structured(
-                messages=messages,
-                output_schema=SearchStrategy,
-                max_tokens=1024,
+                messages=messages, output_schema=SearchStrategy, max_tokens=1024,
             )
             if strategy.queries:
                 print(f"  [{self.display_name}] LLM 搜索策略: {strategy.reasoning}")
                 return strategy.queries
         except Exception as e:
-            log_error(self.display_name, f"搜索策略 LLM 失败: {e}，fallback 拼接")
+            log_error(self.display_name, f"搜索策略 LLM 失败: {e}，fallback")
 
-        # Fallback
-        core_topic = task.core_topic or ""
-        if not core_topic and project_summary:
-            core_topic = project_summary[:15]
-        queries = []
-        for area in task.focus_areas[:2]:
-            prefix = f"{core_topic} " if core_topic else ""
-            queries.append(f"{prefix}{area}")
-        return queries
+        core_topic = task.core_topic or project_summary[:15]
+        return [f"{core_topic} {area}" for area in task.focus_areas[:2]]
 
     # ------------------------------------------------------------------
     # State 构造
     # ------------------------------------------------------------------
 
     def _build_state(
-        self,
-        raw_result: object,
-        project_summary: str,
-        task: DepartmentTask,
+        self, raw_result: object, project_summary: str, task: DepartmentTask,
         sub_slots: dict[str, SubAgentSlot],
-        cycle_count: int,
     ) -> DepartmentState:
-        """从 LLM 输出 + 运行时上下文构造完整的 DepartmentState。"""
         return DepartmentState(
             summary=getattr(raw_result, "summary", None),
             key_points=getattr(raw_result, "key_points", []),
@@ -508,27 +506,21 @@ class BaseMiddleLeader:
             project={"summary": project_summary},
             focus_direction=", ".join(task.focus_areas),
             sub_agents=sub_slots,
-            cycle_count=cycle_count,
+            cycle_count=max((s.round_number for s in sub_slots.values()), default=0),
             department_type=self.dept_key,
         )
 
     def _build_fallback_state(
-        self,
-        project_summary: str,
-        task: DepartmentTask,
-        sub_slots: dict[str, SubAgentSlot],
-        cycle_count: int,
-        error_msg: str,
+        self, project_summary: str, task: DepartmentTask,
+        sub_slots: dict[str, SubAgentSlot], error_msg: str,
     ) -> DepartmentState:
-        """LLM 综合分析失败时的兜底 State。"""
         return DepartmentState(
             summary=f"{self.display_name}分析失败: {error_msg[:200]}",
-            key_points=[],
-            overall_confidence=0.0,
+            key_points=[], overall_confidence=0.0,
             status=AgentStatus.UNCERTAIN,
             project={"summary": project_summary},
             focus_direction=", ".join(task.focus_areas),
             sub_agents=sub_slots,
-            cycle_count=cycle_count,
+            cycle_count=0,
             department_type=self.dept_key,
         )
