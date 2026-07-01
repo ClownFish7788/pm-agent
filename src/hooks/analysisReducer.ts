@@ -19,7 +19,7 @@ export const INITIAL_STATE: AnalysisState = {
   plan: null,
   departments: {},
   callCount: 0,
-  maxCalls: 60,
+  maxCalls: 150,
   finalReport: null,
   errors: [],
 };
