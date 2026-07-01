@@ -353,7 +353,7 @@ class BaseMiddleLeader:
             task=task,
             agent_slots=agent_slots,
         )
-        final_state: ReviewState = await review_graph.ainvoke(initial_state)
+        final_state = ReviewState(**(await review_graph.ainvoke(initial_state)))
 
         # ---- 步骤 4：汇总底层发现 → 格式化文本（AgentSlot → SubAgentSlot 转换） ----
         sub_slots: dict[str, SubAgentSlot] = {}
