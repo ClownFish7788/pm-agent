@@ -132,7 +132,7 @@ class SearchAgent:
             result = await self.llm.chat_structured(
                 messages=messages,
                 output_schema=BottomReport,
-                max_tokens=8192,
+                max_tokens=10384,
             )
         except Exception as e:
             log_error(self.agent_id, f"LLM 调用失败: {type(e).__name__}: {e}")

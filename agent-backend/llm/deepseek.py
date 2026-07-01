@@ -98,7 +98,7 @@ class DeepSeekProvider(BaseLLMProvider):
         messages: list[dict[str, str]],
         *,
         temperature: float = 0.3,
-        max_tokens: int = 2048,
+        max_tokens: int = 16384,
         **kwargs: Any,
     ) -> str:
         """发送消息列表给 DeepSeek，返回自由文本。
@@ -138,7 +138,7 @@ class DeepSeekProvider(BaseLLMProvider):
         output_schema: type[BaseModel],
         *,
         temperature: float = 0.2,
-        max_tokens: int = 2048,
+        max_tokens: int = 16384,
         **kwargs: Any,
     ) -> BaseModel:
         """发送消息给 DeepSeek，返回 Pydantic 结构化对象。
